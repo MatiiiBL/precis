@@ -1,9 +1,13 @@
 """The client behind ``--offline``: a ``FakeAnthropic`` that plays every role.
 
-Each package contributes deterministic responders for the requests it
-makes; this module only collects them. A request no responder recognizes
-raises ``LookupError`` in the fake, which surfaces as a failed stage rather
-than a silent wrong answer.
+It collects the deterministic responders of every package that makes
+requests: the per-paper agents (``precis.agents.offline``: reader, critic,
+reviser, and the fulltext and mapreduce strategies), the corpus steps
+(``precis.corpus.offline``: topic labels, syntheses, the report
+introduction) and the evaluation judge (``precis.eval.offline``).
+``precis run``, the corpus commands and ``precis eval`` all use it. A request
+no responder recognizes raises ``LookupError`` in the fake, which surfaces as
+a failed stage rather than a silent wrong answer.
 """
 
 from __future__ import annotations
