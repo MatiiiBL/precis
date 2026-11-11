@@ -76,6 +76,16 @@ about 45 µs on a laptop SSD (2,000 writes to a WAL file), less than the
 overhead of handing it to a thread, and `usage()` over those 2,000 calls
 takes under a millisecond.
 
+The one write that must not be split is filing a reply: the `LLMCall` row
+that says it was paid for and the cache entry that lets a resumed run
+replay it go in together (`record_reply`, one transaction). They used to be
+two statements, and a SIGKILL between them left a paid call with no cached
+reply, which the next run sent and paid for again; the crash-and-resume
+benchmark caught this about one run in ten. Now a kill leaves either both
+rows or neither, and a reply that was never filed counts as a request in
+flight at the kill. `tests/runtime/test_durability.py` kills the process
+(in effect) at exactly that point.
+
 Each record is stored as the JSON of its pydantic model and validated back
 into that model on read, so a schema drift fails loudly at the boundary
 instead of leaking half-parsed data into the pipeline. Next to the JSON sit
@@ -314,8 +324,11 @@ caller. Now:
 - every batch is recorded in the store (`record_batch`: custom id, request
   hash, stage and paper of each item) as soon as it is created, and closed
   only when its results have been read;
-- every succeeded result is filed (an `LLMCall` row and a cache entry)
-  whether or not its caller is still waiting;
+- every succeeded result is filed (an `LLMCall` row and a cache entry, in
+  one transaction) whether or not its caller is still waiting; the row's id
+  is the batch id and custom id, so a batch collected again after a kill
+  between filing its results and closing it replaces those rows instead of
+  recording the results twice;
 - polling and result-stream errors retry the same batch with backoff up to
   `batch_poll_max_s`, indefinitely; the stream is reopened and entries
   already filed are skipped; items are requeued only once the batch has

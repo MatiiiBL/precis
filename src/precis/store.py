@@ -362,6 +362,23 @@ class Store:
     # ------------------------------------------------------------------
 
     def record_call(self, call: LLMCall) -> None:
+        self._insert_call(call)
+
+    def record_reply(self, call: LLMCall, response: dict[str, Any] | None) -> None:
+        """Record a paid call and cache its response under ``call.request_hash``, atomically.
+
+        Both rows are written in one transaction. Written one after the
+        other, a kill between them left a paid call with no cached reply,
+        and the resumed run sent and paid for the request again. ``None``
+        records the call alone (a refusal, or a reply cut off at
+        ``max_tokens``, which must not be replayed).
+        """
+        with self._transaction():
+            self._insert_call(call)
+            if response is not None:
+                self._insert_cache(call.request_hash, response)
+
+    def _insert_call(self, call: LLMCall) -> None:
         self._db.execute(
             "INSERT OR REPLACE INTO llm_calls (call_id, run_id, paper_id, stage, model, status, "
             "started_at, input_tokens, output_tokens, cache_creation_input_tokens, "
@@ -436,6 +453,9 @@ class Store:
         return response
 
     def cache_put(self, request_hash: str, response: dict[str, Any]) -> None:
+        self._insert_cache(request_hash, response)
+
+    def _insert_cache(self, request_hash: str, response: dict[str, Any]) -> None:
         self._db.execute(
             "INSERT OR REPLACE INTO response_cache (request_hash, created_at, json) "
             "VALUES (?, ?, ?)",

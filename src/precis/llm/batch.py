@@ -57,8 +57,12 @@ from precis.util import canonical_json
 
 log = logging.getLogger(__name__)
 
-type OnResult = Callable[[BatchItem, Message, int, float], Reply]
-"""Files one succeeded result: (item, message, attempts, latency_s) -> the reply to return."""
+type OnResult = Callable[[BatchItem, Message, int, float, str], Reply]
+"""Files one succeeded result: (item, message, attempts, latency_s, batch_id) -> the reply.
+
+Filing must be idempotent: a batch collected again after a kill files its
+results again.
+"""
 
 _TRANSIENT = (
     anthropic.RateLimitError,
@@ -380,7 +384,7 @@ class BatchQueue:
         if result.type == "succeeded":
             latency = self._clock.now() - item.queued_at
             try:
-                reply = self._on_result(item.ref, result.message, item.attempts, latency)
+                reply = self._on_result(item.ref, result.message, item.attempts, latency, batch_id)
             except RefusalError as e:
                 _fail(item, e)
             else:

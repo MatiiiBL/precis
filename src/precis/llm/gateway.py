@@ -295,11 +295,18 @@ class Gateway:
         return reply
 
     def _on_batch_result(
-        self, item: BatchItem, message: Message, attempts: int, latency_s: float
+        self, item: BatchItem, message: Message, attempts: int, latency_s: float, batch_id: str
     ) -> Reply:
         response = _Response(message, attempts, latency_s, None, batch=True)
         started_at = datetime.now(UTC)
-        return self._accept(response, item.request_hash, item.stage, item.paper_id, started_at)
+        return self._accept(
+            response,
+            item.request_hash,
+            item.stage,
+            item.paper_id,
+            started_at,
+            call_id=f"{batch_id}/{item.custom_id}",
+        )
 
     # ------------------------------------------------------------------
     # cache, budget and estimates
@@ -543,7 +550,15 @@ class Gateway:
         stage: str,
         paper_id: str | None,
         started_at: datetime,
+        *,
+        call_id: str | None = None,
     ) -> Reply:
+        """Account for a reply, and file it (call row and cache entry) in one write.
+
+        ``call_id`` names the row; a batch result passes one derived from its
+        batch and custom id, so filing the same result twice (the batch is
+        collected again after a kill) replaces the row instead of adding one.
+        """
         reply = response.reply
         usage = reply.usage
         usd = reply_cost(reply, batch=response.batch)
@@ -556,35 +571,36 @@ class Gateway:
         c.cache_read_input_tokens += usage.cache_read_input_tokens or 0
         c.cost_usd += usd
         refused = reply.stop_reason == "refusal"
-        self._store.record_call(
-            LLMCall(
-                call_id=uuid.uuid4().hex,
-                run_id=self._run_id,
-                paper_id=paper_id,
-                stage=stage,
-                model=reply.model,
-                request_hash=request_hash,
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                cache_creation_input_tokens=usage.cache_creation_input_tokens or 0,
-                cache_read_input_tokens=usage.cache_read_input_tokens or 0,
-                cost_usd=usd,
-                latency_s=response.latency_s,
-                attempts=response.attempts,
-                status="refusal" if refused else "ok",
-                stop_reason=reply.stop_reason,
-                request_id=response.request_id,
-                batch=response.batch,
-                started_at=started_at,
-            )
+        call = LLMCall(
+            call_id=call_id or uuid.uuid4().hex,
+            run_id=self._run_id,
+            paper_id=paper_id,
+            stage=stage,
+            model=reply.model,
+            request_hash=request_hash,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_creation_input_tokens=usage.cache_creation_input_tokens or 0,
+            cache_read_input_tokens=usage.cache_read_input_tokens or 0,
+            cost_usd=usd,
+            latency_s=response.latency_s,
+            attempts=response.attempts,
+            status="refusal" if refused else "ok",
+            stop_reason=reply.stop_reason,
+            request_id=response.request_id,
+            batch=response.batch,
+            started_at=started_at,
         )
+        # Refusals, and replies cut off at max_tokens (which the caller will
+        # retry with a larger budget or give up on), are recorded but never
+        # cached: replaying them would replay the failure.
+        cacheable = (
+            self._config.pipeline.use_cache and not refused and reply.stop_reason != "max_tokens"
+        )
+        self._store.record_reply(call, cache_payload(reply) if cacheable else None)
         if refused:
             c.refusals += 1
             raise RefusalError(reply)
-        # A reply cut off at max_tokens is one the caller will retry with a
-        # larger budget or give up on; caching it would replay the failure.
-        if self._config.pipeline.use_cache and reply.stop_reason != "max_tokens":
-            self._store.cache_put(request_hash, cache_payload(reply))
         return reply
 
     def _record_failure(
