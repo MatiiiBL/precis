@@ -10,7 +10,6 @@ Everything downstream works on ``PaperView`` objects.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
 from precis.models import (
     PaperMeta,
@@ -21,6 +20,7 @@ from precis.models import (
     StageStatus,
     Verification,
 )
+from precis.store import Store
 
 
 @dataclass(frozen=True)
@@ -44,14 +44,6 @@ class PaperView:
     @property
     def revised(self) -> bool:
         return self.summary.revision > self.draft.revision
-
-
-class StageReader(Protocol):
-    """The part of ``precis.store.Store`` that loading needs."""
-
-    def get_paper(self, paper_id: str) -> PaperMeta | None: ...
-    def get_stage(self, paper_id: str, stage: Stage) -> StageRecord | None: ...
-    def papers_with_status(self, stage: Stage, status: StageStatus) -> list[str]: ...
 
 
 def _done_output(record: StageRecord | None) -> dict[str, object] | None:
@@ -85,7 +77,7 @@ def paper_view(
     return PaperView(meta, revision.summary, revision.verification, draft, draft_verification)
 
 
-def load_papers(store: StageReader) -> list[PaperView]:
+def load_papers(store: Store) -> list[PaperView]:
     """Every paper whose read stage is done, ordered by id."""
     views = []
     for paper_id in sorted(store.papers_with_status(Stage.READ, StageStatus.DONE)):

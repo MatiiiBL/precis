@@ -244,6 +244,9 @@ class SynthesisStats(BaseModel):
 
 class ReportStats(BaseModel):
     topics: list[SynthesisStats]
+    topics_digest: str = Field(
+        default="", description="Digest of the topic model the report was written from."
+    )
 
     @property
     def invalid_citations(self) -> int:

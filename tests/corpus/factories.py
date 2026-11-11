@@ -6,10 +6,11 @@ import json
 import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from anthropic.types import Message
+from pydantic import BaseModel
 
 from precis.corpus.load import PaperView
 from precis.llm.base import Reply
@@ -18,9 +19,14 @@ from precis.models import (
     Finding,
     PaperMeta,
     PaperSummary,
+    RevisionResult,
+    Stage,
+    StageRecord,
+    StageStatus,
     Verdict,
     Verification,
 )
+from precis.store import Store
 
 # Each theme has its own vocabulary; papers draw most of their words from
 # their theme, so a working clustering recovers the themes.
@@ -135,6 +141,37 @@ def make_view(
         return PaperView(meta, draft, draft_check, draft, draft_check)
     final = make_summary(paper_id, words, revision=1)
     return PaperView(meta, final, make_verification(final), draft, draft_check)
+
+
+def stage_record(
+    paper_id: str,
+    stage: Stage,
+    output: BaseModel | None,
+    status: StageStatus = StageStatus.DONE,
+) -> StageRecord:
+    return StageRecord(
+        paper_id=paper_id,
+        stage=stage,
+        status=status,
+        attempts=1,
+        config_hash="h",
+        run_id="run-1",
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+        output=None if output is None else output.model_dump(mode="json"),
+    )
+
+
+def fill_store(store: Store, papers: list[PaperView]) -> None:
+    """Write papers the way the pipeline does: read, verify and revise records."""
+    for paper in papers:
+        store.upsert_paper(paper.meta)
+        store.set_stage(stage_record(paper.id, Stage.READ, paper.draft))
+        store.set_stage(stage_record(paper.id, Stage.VERIFY, paper.draft_verification))
+        if paper.revised and paper.verification is not None:
+            result = RevisionResult(summary=paper.summary, verification=paper.verification)
+            store.set_stage(stage_record(paper.id, Stage.REVISE, result))
+        else:
+            store.set_stage(stage_record(paper.id, Stage.REVISE, None, StageStatus.SKIPPED))
 
 
 def themed_corpus(per_theme: int, *, seed: int = 0) -> tuple[list[PaperView], dict[str, str]]:
