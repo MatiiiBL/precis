@@ -1,9 +1,269 @@
-"""``precis run`` and ``precis status``: the per-paper agent pipeline."""
+"""``precis run``, ``precis status`` and ``precis export``: the per-paper agent pipeline."""
 
 from __future__ import annotations
 
+import asyncio
+import json
+import secrets
+from datetime import UTC, datetime
+from enum import StrEnum
+from pathlib import Path
+from typing import Annotated, Any
+
 import typer
+from rich.console import Console
+from rich.table import Table
+
+from precis.config import Config
+from precis.llm import Gateway, UnpricedModelError, make_client
+from precis.models import Stage, StageStatus
+from precis.offline import offline_client
+from precis.pipeline import PIPELINE_STAGES, LiveProgress, Pipeline, paper_result
+from precis.store import Store
+
+console = Console()
+INTERRUPTED_EXIT_CODE = 130
+
+
+class Strategy(StrEnum):
+    AGENTIC = "agentic"
+    FULLTEXT = "fulltext"
+    MAPREDUCE = "mapreduce"
+
+
+class Mode(StrEnum):
+    ONLINE = "online"
+    BATCH = "batch"
+
+
+def _config(ctx: typer.Context) -> Config:
+    # Imported here: precis.cli imports this module while it is being set up.
+    from precis.cli import get_config
+
+    return get_config(ctx)
+
+
+def parse_stages(value: str) -> list[Stage]:
+    """``"read,verify"`` -> stages; ``fetch`` belongs to ``precis fetch``."""
+    names = [v.strip() for v in value.split(",") if v.strip()]
+    allowed = {s.value: s for s in PIPELINE_STAGES}
+    unknown = [n for n in names if n not in allowed]
+    if unknown or not names:
+        raise typer.BadParameter(
+            f"choose from {', '.join(allowed)} (got {', '.join(unknown) or 'nothing'})"
+        )
+    return [allowed[n] for n in names]
+
+
+def select_papers(store: Store, ids: list[str] | None, limit: int | None) -> list[str]:
+    """The given ids (comma-separated or repeated), or the newest papers in the store."""
+    if ids:
+        chosen = list(dict.fromkeys(i.strip() for v in ids for i in v.split(",") if i.strip()))
+        return chosen[:limit] if limit is not None else chosen
+    return [meta.id for meta in store.list_papers(limit=limit)]
+
+
+def new_run_id() -> str:
+    return f"run-{datetime.now(UTC):%Y%m%dT%H%M%S}-{secrets.token_hex(3)}"
+
+
+def run_command(
+    ctx: typer.Context,
+    stages: Annotated[
+        str, typer.Option(help="Comma-separated stages to run, in pipeline order.")
+    ] = "read,verify,revise",
+    strategy: Annotated[
+        Strategy | None, typer.Option(help="Summarization strategy (overrides the config).")
+    ] = None,
+    limit: Annotated[int | None, typer.Option(min=1, help="At most this many papers.")] = None,
+    ids: Annotated[
+        list[str] | None, typer.Option(help="Paper ids, comma-separated or repeated.")
+    ] = None,
+    mode: Annotated[
+        Mode, typer.Option(help="online, or batch for the Message Batches API at half price.")
+    ] = Mode.ONLINE,
+    max_cost: Annotated[
+        float | None, typer.Option(min=0, help="Stop admitting papers at this spend, in USD.")
+    ] = None,
+    offline: Annotated[
+        bool, typer.Option(help="Answer every request with the deterministic offline client.")
+    ] = False,
+) -> None:
+    """Read, verify and revise papers with LLM agents."""
+    config = _config(ctx)
+    updates: dict[str, Any] = {}
+    if strategy is not None:
+        updates["agents"] = config.agents.model_copy(update={"strategy": strategy.value})
+    if max_cost is not None:
+        updates["budget"] = config.budget.model_copy(update={"max_cost_usd": max_cost})
+    config = config.model_copy(update=updates)
+    wanted = parse_stages(stages)
+
+    store = Store(config.store_path)
+    try:
+        paper_ids = select_papers(store, ids, limit)
+        if not paper_ids:
+            console.print("No papers in the store; run [bold]precis fetch[/bold] first.")
+            raise typer.Exit(1)
+        client = offline_client() if offline else make_client(config)
+        try:
+            gateway = Gateway(client, store, run_id=new_run_id(), config=config, mode=mode.value)
+        except (NotImplementedError, UnpricedModelError) as e:
+            console.print(f"[red]Cannot start the run:[/red] {e}")
+            raise typer.Exit(2) from e
+        pipeline = Pipeline(config, store, gateway)
+        stats = asyncio.run(_run(pipeline, paper_ids, wanted))
+    finally:
+        store.close()
+    _print_run_summary(gateway.run_id, stats)
+    if stats["interrupted"]:
+        raise typer.Exit(INTERRUPTED_EXIT_CODE)
+
+
+async def _run(pipeline: Pipeline, paper_ids: list[str], stages: list[Stage]) -> dict[str, Any]:
+    try:
+        with LiveProgress(pipeline, console=console):
+            return await pipeline.run(paper_ids, stages)
+    finally:
+        await pipeline.gateway.aclose()
+
+
+def _print_run_summary(run_id: str, stats: dict[str, Any]) -> None:
+    gateway = stats["gateway"]
+    console.print(
+        f"\n[bold]{run_id}[/bold]: {stats['papers_finished']} of {stats['papers']} papers "
+        f"finished, {stats['papers_blocked']} blocked, in {stats['elapsed_s']:.1f}s; "
+        f"{gateway['calls']:,} requests ({gateway['cached_calls']:,} from cache), "
+        f"${gateway['cost_usd']:.4f}."
+    )
+    faithfulness = stats["faithfulness"]
+    if faithfulness["verified"]:
+        line = f"Supported claims: {faithfulness['supported_before']:.0%} of first drafts"
+        if faithfulness["revised"]:
+            line += (
+                f"; {faithfulness['supported_after_revision']:.0%} after revising "
+                f"{faithfulness['revised']} summaries"
+            )
+        console.print(line + ".")
+    if stats["budget_reached"]:
+        console.print("[yellow]The budget was reached; run again to finish the rest.[/yellow]")
+    if stats["interrupted"]:
+        console.print(
+            "[yellow]Interrupted; unfinished stages are pending for the next run.[/yellow]"
+        )
+
+
+def status_command(ctx: typer.Context) -> None:
+    """Show stage counts, recent runs and model usage."""
+    config = _config(ctx)
+    store = Store(config.store_path)
+    try:
+        console.print(f"[bold]{store.count_papers():,} papers[/bold] in {config.store_path}")
+        console.print(_stage_table(store))
+        runs = store.runs()[-5:]
+        if runs:
+            console.print(_runs_table(runs))
+        usage = store.usage()
+        if usage:
+            console.print(_usage_table(store))
+    finally:
+        store.close()
+
+
+def _stage_table(store: Store) -> Table:
+    counts = store.stage_counts()
+    table = Table(title="Stages", title_justify="left")
+    table.add_column("stage")
+    for status in StageStatus:
+        table.add_column(status.value, justify="right")
+    for stage in Stage:
+        table.add_row(stage.value, *(f"{counts[stage][s]:,}" for s in StageStatus))
+    return table
+
+
+def _runs_table(runs: list[dict[str, Any]]) -> Table:
+    table = Table(title="Recent runs", title_justify="left")
+    for name in ("run", "started", "papers", "finished", "requests", "cost", "note"):
+        table.add_column(name, justify="left" if name in ("run", "started", "note") else "right")
+    for run in runs:
+        stats = run["stats"] or {}
+        gateway = stats.get("gateway", {})
+        note = (
+            "running or crashed"
+            if run["finished_at"] is None
+            else "interrupted"
+            if stats.get("interrupted")
+            else "budget reached"
+            if stats.get("budget_reached")
+            else ""
+        )
+        table.add_row(
+            run["run_id"],
+            f"{run['started_at']:%Y-%m-%d %H:%M}",
+            str(stats.get("papers", "")),
+            str(stats.get("papers_finished", "")),
+            f"{gateway.get('calls', 0):,}",
+            f"${gateway.get('cost_usd', 0.0):.4f}",
+            note,
+        )
+    return table
+
+
+def _usage_table(store: Store) -> Table:
+    table = Table(title="Usage (all runs)", title_justify="left")
+    for name in ("stage", "model", "calls", "cached", "input", "cache read", "output", "cost"):
+        table.add_column(name, justify="left" if name in ("stage", "model") else "right")
+    for row in store.usage():
+        table.add_row(
+            row.stage,
+            row.model,
+            f"{row.calls:,}",
+            f"{row.cached_calls:,}",
+            f"{row.input_tokens + row.cache_creation_input_tokens:,}",
+            f"{row.cache_read_input_tokens:,}",
+            f"{row.output_tokens:,}",
+            f"${row.cost_usd:.4f}",
+        )
+    return table
+
+
+def export_command(
+    ctx: typer.Context,
+    out: Annotated[Path, typer.Option(help="JSON Lines file to write.")] = Path("summaries.jsonl"),
+) -> None:
+    """Write every paper's final summary and verification as JSON Lines."""
+    config = _config(ctx)
+    store = Store(config.store_path)
+    written = 0
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("w", encoding="utf-8") as f:
+            for meta in store.list_papers():
+                result = paper_result(store, meta.id)
+                if result is None:
+                    continue
+                verification = result.verification
+                record = {
+                    "paper": meta.model_dump(
+                        mode="json",
+                        include={"id", "title", "authors", "published", "primary_category", "url"},
+                    ),
+                    "summary": result.summary.model_dump(mode="json"),
+                    "verification": verification.model_dump(mode="json") if verification else None,
+                    "supported_fraction": verification.supported_fraction()
+                    if verification
+                    else None,
+                    "revised": result.revised,
+                }
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                written += 1
+    finally:
+        store.close()
+    console.print(f"Wrote {written:,} summaries to {out}.")
 
 
 def register(app: typer.Typer) -> None:
     """Add the pipeline commands to ``app``."""
+    app.command("run")(run_command)
+    app.command("status")(status_command)
+    app.command("export")(export_command)
