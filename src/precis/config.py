@@ -175,16 +175,15 @@ class CorpusConfig(Record):
 class BenchConfig(Record):
     """The simulated API that the offline throughput and fault benchmarks run against."""
 
-    papers: int = Field(default=2000, gt=0)
+    papers: int = Field(default=2000, gt=0, description="Papers in the throughput benchmark.")
     concurrency: list[int] = Field(
-        default=[4, 8, 16, 32, 64, 128], description="Concurrency ceilings to sweep."
+        default=[4, 8, 16, 32, 64, 128, 256], description="Concurrency ceilings to sweep."
     )
     rpm: int = Field(default=4000, gt=0, description="Simulated server limit, requests/min.")
     itpm: int = Field(default=2_000_000, gt=0, description="Simulated input tokens/min.")
     otpm: int = Field(default=400_000, gt=0, description="Simulated output tokens/min.")
-    time_scale: float = Field(
-        default=600.0, gt=0, description="Simulated seconds per real second (scaled clock)."
-    )
+    faults_papers: int = Field(default=500, gt=0, description="Papers in the fault benchmark.")
+    faults_concurrency: int = Field(default=32, gt=0)
     seed: int = 0
 
 
