@@ -9,7 +9,7 @@ from pypdf import PageObject
 from precis.models import Document
 from precis.text.document import ParseError
 from precis.text.html import parse_html
-from precis.text.pdf import parse_pdf, read_pdf
+from precis.text.pdf import _drop_contents, parse_pdf, read_pdf
 from precis.text.quality import check_document
 
 from .helpers import FIXTURES, PdfLine, make_pdf
@@ -355,3 +355,149 @@ def test_real_preprint_with_lettered_appendix_after_author_year_references() -> 
     assert front.title == "Budgeted Cache Repair for Cross-Context KV-Cache Reuse"
     assert front.license == "http://creativecommons.org/licenses/by/4.0/"
     assert front.abstract.startswith("Cross-context KV-cache reuse predicts")
+
+
+# The cases below come from the full cs.AR run (paper ids in the test names'
+# docstrings); the lines are the shapes pypdf extracted from those papers.
+
+
+def varied(paragraphs: int, start: int = 0) -> list[str]:
+    """Distinct lines of running text: identical lines would look like running headers."""
+    numbers = range(start, start + paragraphs)
+    tags = [f"q{chr(97 + (n // 26) % 26)}{chr(97 + n % 26)}" for n in numbers]
+    return [
+        line
+        for tag in tags
+        for line in (
+            f"{tag} servers spend a large share of their time waiting for memory and",
+            f"the last level cache of {tag} is the main defence against that latency",
+            f"in the systems that we study, so the {tag} policy that decides which",
+            f"block to evict matters for performance and for the {tag} energy budget.",
+        )
+    ]
+
+
+def test_a_table_of_contents_is_not_taken_for_headings() -> None:
+    """2507.07223: TOC entries ("Conclusion 51") beat the real headings."""
+    lines: list[PdfLine] = [
+        ("A Survey of Memory Interconnects", 16.0),
+        "Contents",
+        "1 Introduction 3",
+        "2 From RNNs to Transformers: Evolution in Sequence Modeling 4",
+        "2.1 Understanding Time-Series Data and the Sequence-to-Sequence Framework . . . . . . 5",
+        "2.2 A Paradigm Shift in Sequence Modeling . . . . . . . . . . . . . . . . . . . . . . . 7",
+        "3 Scaling LLMs: Multi-Accelerator and Data Center Deployments 13",
+        "4 Conclusion 21",
+        "References 22",
+        "1. Introduction",
+        *prose("INTRO"),
+        "2. From RNNs to Transformers: Evolution in Sequence Modeling",
+        *prose("RNN"),
+        "2.1. Understanding Time-Series Data and the Sequence-to-Sequence Framework",
+        *prose("SERIES"),
+        "2.2. A Paradigm Shift in Sequence Modeling",
+        *prose("SHIFT"),
+        "3. Scaling LLMs: Multi-Accelerator and Data Center Deployments",
+        *prose("SCALE"),
+        "4. Conclusion",
+        *prose("END"),
+    ]
+    doc = parse(lines)
+    assert [(s.id, s.title) for s in doc.sections] == [
+        ("s1", "Introduction"),
+        ("s2", "From RNNs to Transformers: Evolution in Sequence Modeling"),
+        ("s2.1", "Understanding Time-Series Data and the Sequence-to-Sequence Framework"),
+        ("s2.2", "A Paradigm Shift in Sequence Modeling"),
+        ("s3", "Scaling LLMs: Multi-Accelerator and Data Center Deployments"),
+        ("s4", "Conclusion"),
+    ]
+    text = text_of(doc)
+    assert "Contents" not in text
+    assert ". . ." not in text
+
+
+def test_table_rows_ending_in_numbers_are_not_a_table_of_contents() -> None:
+    rows = ["3.1 56 X 56 X 128 3 X 3 X 128 X 256", "3.2 56 X 56 X 256 3 X 3 X 256 X 256"]
+    toc = [
+        "1 Introduction 3",
+        "2 Background and Related Work 5",
+        "3 Our Design 9",
+        "4 Main Results 12",
+    ]
+    lines = [*rows, *rows, "Some running text that the paper wrote about it here.", *toc]
+    assert _drop_contents(lines, median_len=60) == lines[:5]
+
+
+def test_a_lopsided_outline_falls_back_to_parts() -> None:
+    """Two sections, one holding the whole paper, means the headings were wrong."""
+    lines: list[PdfLine] = ["1 Introduction", *varied(2), "2 Results", *varied(60, start=2)]
+    doc = parse(lines)
+    assert len(doc.sections) >= 3
+    assert [s.title for s in doc.sections] == [f"Part {i}" for i in range(1, len(doc.sections) + 1)]
+    assert "qaa servers" in text_of(doc)
+    # A short paper keeps its headings even when one section dominates.
+    short = parse(["1 Introduction", *varied(1), "2 Results", *varied(12, start=1)])
+    assert [s.title for s in short.sections] == ["Introduction", "Results"]
+
+
+def test_headings_wrapped_onto_a_second_line_are_joined() -> None:
+    """2507.12904 s2.2 and 2507.07223 s6 were cut at the line break."""
+    lines: list[PdfLine] = [
+        "1 Introduction",
+        *prose("INTRO"),
+        "2 Applications of CGRAs in Signal Processing and Deep",
+        "Learning",
+        *prose("CGRA"),
+        "3 Beyond CXL: Optimizing AI Resource Connectivity via Hybrid",
+        "Link Architectures",
+        *prose("CXL"),
+        # Not wraps: a short title, then a sub-heading or an algorithm name.
+        "4 FFT Engine",
+        "Theory of Operation",
+        *prose("FFT"),
+        "5 Material mechanical properties",
+        "Anisotropy",
+        *prose("MATERIAL"),
+    ]
+    doc = parse(lines)
+    assert [s.title for s in doc.sections] == [
+        "Introduction",
+        "Applications of CGRAs in Signal Processing and Deep Learning",
+        "Beyond CXL: Optimizing AI Resource Connectivity via Hybrid Link Architectures",
+        "FFT Engine",
+        "Material mechanical properties",
+    ]
+    assert doc.sections[3].text.startswith("Theory of Operation FFT servers")
+
+
+def test_references_heading_with_a_period_and_sentences_that_wrap_after_a_number() -> None:
+    """2508.13249: "References." went unrecognized, so numbered references continued the
+    section numbers, and "Table" / "3. ICE models ..." beat "3. Methods"."""
+    lines: list[PdfLine] = [
+        "1. Introduction",
+        *prose("INTRO"),
+        "2. Literature review",
+        "Several cost models were proposed and their empirical advantages are shown in Table",
+        "3. ICE models energy via platform parameters and algorithmic work, validated across",
+        "multiple platforms; however, it does not provide static accounting for the code.",
+        *prose("REVIEW"),
+        "3. Methods and mathematical background",
+        *prose("METHODS"),
+        "4. Conclusion",
+        *prose("END"),
+        "References.",
+        "1. Smith, A. (2008). Spearman Rank Correlation Coefficient. In: Encyclopedia.",
+        "2. Jones, B. (2011). Instruction tables. Copenhagen University College.",
+        "3. Lee, C. (2023). Energy Complexity of Computation. Springer-Verlag.",
+        "4. Kim, D. (2019). Characterizing Latency and Throughput of Instructions.",
+        "5. Park, E. (2018). Mastering Smart Contracts. O'Reilly Media.",
+    ]
+    doc = parse(lines)
+    assert [s.title for s in doc.sections] == [
+        "Introduction",
+        "Literature review",
+        "Methods and mathematical background",
+        "Conclusion",
+    ]
+    assert "Spearman" not in text_of(doc)
+    assert "ICE models energy" in doc.sections[1].text

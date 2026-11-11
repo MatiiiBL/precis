@@ -42,12 +42,20 @@ from pypdf import PdfReader
 from precis.models import Caption, Document
 from precis.text.document import ParseError, SectionDraft, build_document, split_into_parts
 from precis.text.normalize import clean_chars, squash
-from precis.util import sha256_hex
+from precis.util import estimate_tokens, sha256_hex
 
 logger = logging.getLogger(__name__)
 
 # Fraction of pages whose text may fail to extract before the PDF is rejected.
 MAX_FAILED_PAGES = 0.25
+
+# An outline with fewer than DOMINANCE_MAX_SECTIONS sections, one of which
+# holds over DOMINANCE_SHARE of a paper of at least DOMINANCE_MIN_TOKENS, is
+# rejected (see _one_section_dominates). Short papers are exempt: a 2,000-token
+# extended abstract can legitimately be one long section.
+DOMINANCE_SHARE = 0.8
+DOMINANCE_MAX_SECTIONS = 6
+DOMINANCE_MIN_TOKENS = 3000
 
 _FURNITURE_ZONE = 2  # lines at the top and bottom of a page checked for headers
 _PAGE_NUMBER = re.compile(r"^(?:page\s+)?(?:\d{1,4}|[ivxlc]{1,6})(?:\s+of\s+\d{1,4})?$", re.I)
@@ -63,7 +71,7 @@ _PERMISSION_START = re.compile(r"^permission to make digital or hard copies", re
 _PERMISSION_END = re.compile(r"acm isbn|\$15\.00|https?://doi\.org/", re.I)
 
 _REFERENCES = re.compile(
-    r"^(?:(?:\d{1,2}|[IVX]{1,5})\.?\s+)?(?:references|bibliography|r eferences)$", re.I
+    r"^(?:(?:\d{1,2}|[IVX]{1,5})\.?\s+)?(?:references|bibliography|r eferences)[.:]?$", re.I
 )
 _APPENDIX = re.compile(r"^(?:[A-H]\.?\s+)?(?:appendix|appendices)\b", re.I)
 _DROP_HEADINGS = re.compile(
@@ -85,6 +93,15 @@ _IEEE_RUN_IN = re.compile(r"^(?P<num>\d{1,2})\)\s+(?P<title>[A-Z][^:]{1,80}):\s*
 _RUN_IN = re.compile(r"^(?P<title>[^.]{2,80}?)\.\s?(?P<rest>[A-Z(\[](?:\S+\s+){3,}.*)$")
 _CONNECTORS = frozenset({"and", "or", "of", "for", "the", "with", "in", "on", "to", "via", "a"})
 _NUMBERED_REFERENCE = re.compile(r"^\[\d{1,3}\]")
+# Table-of-contents entries: a title ending in a page number, the strong
+# forms numbered ("2.1 Title 5") or with dot leaders ("Title . . . . 5").
+_TOC_ENTRY = re.compile(r"[A-Za-z].*\s\d{1,3}$")
+# Entries that count towards a block need two real words, so table rows that
+# end in numbers ("3.1 56 X 56 X 128 3 X 3 X 128 X 256") never form one.
+_TOC_WORDS = re.compile(r"[A-Za-z]{3,}\W.*[A-Za-z]{3,}")
+_TOC_NUMBERED = re.compile(r"^(?:\d{1,2}(?:\.\d{1,2}){0,2}|[A-H]|[IVX]{1,5})\.?\s+\S")
+_TOC_LEADERS = re.compile(r"(?:\.\s?){3,}\d{1,3}$")
+_CONTENTS = re.compile(r"^(?:table of )?contents$", re.I)
 # Reference-list lines that look like lettered headings: "A. Smith, B. Jones, 2021".
 _AUTHOR_LIKE = re.compile(r"\b(?:19|20)\d{2}\b|et al|\b[A-Z]\.\s?[A-Z]\.|^[A-Z][a-z]+,")
 _UNITS = frozenset({"GHz", "MHz", "KHz", "KB", "MB", "GB", "TB", "Gb", "Mb", "W", "V", "X", "K"})
@@ -159,19 +176,24 @@ class _Candidate:
     title: str
     span: int = 1
     rest: str = ""
+    runs_on: bool = False  # the next line continues it in lowercase, like a sentence
 
     @property
     def weight(self) -> float:
         """How heading-like the title is: Title Case or ALL CAPS beats a sentence.
 
-        Numbered list items ("1. We propose ...") form chains too; the weight
-        makes the chain through real headings win.
+        Numbered list items ("1. We propose ...") and sentences that wrapped
+        after a number ("... shown in Table" / "3. ICE models energy via ...,
+        validated across" / "multiple platforms ...") form chains too; the
+        weight makes the chain through real headings win.
         """
         words = [w for w in self.title.split() if len(w) >= 4 and w[0].isalpha()]
         if not words or _all_caps(self.title):
-            return 1.0
-        capitalized = sum(w[0].isupper() for w in words) / len(words)
-        return 1.0 if capitalized >= 0.5 else 0.7
+            weight = 1.0
+        else:
+            capitalized = sum(w[0].isupper() for w in words) / len(words)
+            weight = 1.0 if capitalized >= 0.5 else 0.7
+        return weight / 2 if self.runs_on else weight
 
     def heading(self, level: int) -> _Heading:
         return _Heading(self.index, self.title, level, span=self.span, rest=self.rest)
@@ -222,13 +244,86 @@ def _parse(reader: PdfReader, data: bytes, paper_id: str) -> tuple[Document, lis
     lines = _clean_lines(_page_lines(reader))
     if not lines:
         raise ParseError("the PDF has no extractable text (scanned images?)")
-    doc_lines = _Lines(lines, _median_len(lines), _vocabulary(lines))
+    median = _median_len(lines)
+    lines = _drop_contents(lines, median)
+    doc_lines = _Lines(lines, median, _vocabulary(lines))
     body, tail = _split_references(lines)
     headings = _find_headings(body, doc_lines)
+    drafts, captions = _structure(body, tail, headings, doc_lines)
+    if headings and _one_section_dominates(drafts):
+        headings, drafts, captions = _restructure(paper_id, body, tail, doc_lines)
     front_end = headings[0].index if headings else len(body) - len(_after_abstract(body))
     front = body[:front_end]
-    drafts, captions = _structure(body, tail, headings, doc_lines)
     return build_document(paper_id, "pdf", drafts, captions, sha256_hex(data)), front
+
+
+def _one_section_dominates(drafts: list[SectionDraft]) -> bool:
+    """A few sections, one of which holds nearly the whole paper: the headings are wrong.
+
+    Real papers spread their text over their sections; an outline like
+    "Conclusion: 46,000 tokens" means the chosen headings were not the
+    paper's (a table of contents, figure labels) and most were missed.
+    """
+    sizes = [estimate_tokens(d.text) for d in drafts]
+    total = sum(sizes)
+    return (
+        total >= DOMINANCE_MIN_TOKENS
+        and sum(1 for s in sizes if s) < DOMINANCE_MAX_SECTIONS
+        and max(sizes) > DOMINANCE_SHARE * total
+    )
+
+
+def _restructure(
+    paper_id: str, body: list[str], tail: list[str], doc: _Lines
+) -> tuple[list[_Heading], list[SectionDraft], list[Caption]]:
+    """Second try when numbered headings gave a lopsided outline: unnumbered
+    headings if they do better, else parts, since no outline beats a wrong one."""
+    headings = _unnumbered_headings(body, doc)
+    if headings:
+        drafts, captions = _structure(body, tail, headings, doc)
+        if not _one_section_dominates(drafts):
+            logger.warning("%s: numbered headings were lopsided; used unnumbered ones", paper_id)
+            return headings, drafts, captions
+    logger.warning("%s: no trustworthy headings; split into parts", paper_id)
+    drafts, captions = _structure(body, tail, [], doc)
+    return [], drafts, captions
+
+
+def _drop_contents(lines: list[str], median_len: float) -> list[str]:
+    """Remove table-of-contents blocks, which otherwise pass for headings.
+
+    A block is a run of entries ending in a page number (often after dot
+    leaders) with no running text between them, at least three of which are
+    numbered or dot-led, so a table whose rows end in numbers does not count
+    unless it looks like a table of contents too. The "Contents" line above
+    a block goes with it.
+    """
+    doc = _Lines(lines, median_len)
+    drop: set[int] = set()
+    i = 0
+    while i < len(lines):
+        if not _TOC_ENTRY.search(lines[i]):
+            i += 1
+            continue
+        strong, last, j = 0, i, i
+        while j < len(lines):
+            line = lines[j]
+            if _TOC_ENTRY.search(line):
+                strong += _strong_toc_entry(line)
+                last = j
+            elif _is_prose(line, doc):
+                break
+            j += 1
+        if strong >= 3:
+            start = i - 1 if i > 0 and _CONTENTS.match(lines[i - 1]) else i
+            drop.update(range(start, last + 1))
+        i = last + 1
+    return [line for n, line in enumerate(lines) if n not in drop]
+
+
+def _strong_toc_entry(line: str) -> bool:
+    numbered_or_dotted = bool(_TOC_NUMBERED.match(line) or _TOC_LEADERS.search(line))
+    return numbered_or_dotted and bool(_TOC_WORDS.search(line))
 
 
 # -- reading -------------------------------------------------------------------
@@ -391,12 +486,12 @@ def _structure(
     appendix_lines: list[str] = []
     if headings:
         last_top = max(h.index for h in headings if h.level == 1)
-        start = _appendix_start(body, last_top + 1, taken={h.index for h in headings})
+        start = _appendix_start(body, last_top + 1, {h.index for h in headings}, doc)
         if start is not None:
             appendix_lines = body[start:]
             body = body[:start]
             headings = [h for h in headings if h.index < start]
-    tail_start = _appendix_start(tail, _references_end(tail), taken=set())
+    tail_start = _appendix_start(tail, _references_end(tail), set(), doc)
     if tail_start is not None:
         appendix_lines += tail[tail_start:]
     captions: list[Caption] = []
@@ -443,7 +538,7 @@ def _references_end(tail: list[str]) -> int:
     return numbered[-1] + 1 if numbered else 0
 
 
-def _appendix_start(lines: list[str], start: int, taken: set[int]) -> int | None:
+def _appendix_start(lines: list[str], start: int, taken: set[int], doc: _Lines) -> int | None:
     """Where an appendix begins at or after ``start``, or ``None``.
 
     An appendix announces itself with the word ("Appendix", "APPENDIX B")
@@ -453,12 +548,12 @@ def _appendix_start(lines: list[str], start: int, taken: set[int]) -> int | None
         line = lines[i]
         if _APPENDIX.match(line) and len(line.split()) <= 10 and not line.endswith((".", ",")):
             return i
-    lettered = [c for c in _lettered_candidates(lines, start) if c.index not in taken]
+    lettered = [c for c in _lettered_candidates(lines, doc, start) if c.index not in taken]
     chain = _longest_chain(lettered)
     return chain[0].index if chain and chain[0].key == (1,) else None
 
 
-def _lettered_candidates(lines: list[str], start: int = 0) -> list[_Candidate]:
+def _lettered_candidates(lines: list[str], doc: _Lines, start: int = 0) -> list[_Candidate]:
     candidates = []
     for i in range(start, len(lines)):
         match = _APPENDIX_NUMBERED.match(lines[i])
@@ -466,7 +561,7 @@ def _lettered_candidates(lines: list[str], start: int = 0) -> list[_Candidate]:
             continue
         parts = match["num"].split(".")
         key = (ord(parts[0]) - ord("A") + 1, *(int(p) for p in parts[1:]))
-        candidate = _candidate(lines, i, key, match["title"])
+        candidate = _candidate(lines, i, key, match["title"], doc)
         if candidate is not None:
             candidates.append(candidate)
     return candidates
@@ -476,7 +571,7 @@ def _appendix(
     lines: list[str], doc: _Lines, captions: list[Caption], counts: dict[str, int]
 ) -> list[SectionDraft]:
     """Appendix sections: lettered headings (``A``, ``A.1``) when present, else one section."""
-    headings = _numbered_chain(_lettered_candidates(lines))
+    headings = _numbered_chain(_lettered_candidates(lines, doc))
     if not headings or headings[0].index > 1:
         title = lines[0] if _APPENDIX.match(lines[0]) else "Appendix"
         for heading in headings:
@@ -495,20 +590,22 @@ def _find_headings(lines: list[str], doc: _Lines) -> list[_Heading]:
         candidate: _Candidate | None = None
         if m := _ARABIC.match(line):
             if m["title"].split()[0] not in _UNITS:
-                candidate = _candidate(lines, i, _arabic_key(m["num"]), m["title"])
+                candidate = _candidate(lines, i, _arabic_key(m["num"]), m["title"], doc)
         elif (m := _LONE_NUMBER.match(line)) and _lone_number_heading(lines, i, doc):
             # "3" alone with the title on the next line; axis ticks are
             # excluded by requiring prose after the title.
-            title_line = _candidate(lines, i + 1, _arabic_key(m["num"]), lines[i + 1])
+            title_line = _candidate(lines, i + 1, _arabic_key(m["num"]), lines[i + 1], doc)
             if title_line is not None:
                 candidate = replace(title_line, index=i, span=title_line.span + 1)
         if candidate is not None:
             arabic.append(candidate)
         candidate = None
         if m := _ROMAN.match(line):
-            candidate = _candidate(lines, i, (_roman(m["num"]),), _small_caps(m["title"]))
+            title = _small_caps(m["title"])
+            candidate = _candidate(lines, i, (_roman(m["num"]),), title, doc)
         elif m := _LETTER.match(line):
-            candidate = _candidate(lines, i, (0, ord(m["num"]) - ord("A") + 1), m["title"])
+            letter = ord(m["num"]) - ord("A") + 1
+            candidate = _candidate(lines, i, (0, letter), m["title"], doc)
         elif (m := _IEEE_RUN_IN.match(line)) and _ieee_run_in(m):
             candidate = _Candidate(i, (0, 0, int(m["num"])), m["title"], rest=m["rest"])
         if candidate is not None:
@@ -517,8 +614,17 @@ def _find_headings(lines: list[str], doc: _Lines) -> list[_Heading]:
     by_arabic = _numbered_chain(arabic)
     by_roman = _roman_chain(roman)
     numbered = max(by_arabic, by_roman, key=lambda hs: sum(h.level == 1 for h in hs))
-    enough = sum(h.level == 1 for h in numbered) >= 2
-    headings = numbered if enough else _unnumbered(lines, doc)
+    if sum(h.level == 1 for h in numbered) < 2:
+        return _unnumbered_headings(lines, doc)
+    return _finish_headings(lines, numbered)
+
+
+def _unnumbered_headings(lines: list[str], doc: _Lines) -> list[_Heading]:
+    return _finish_headings(lines, _unnumbered(lines, doc))
+
+
+def _finish_headings(lines: list[str], headings: list[_Heading]) -> list[_Heading]:
+    """Mark Abstract/Acknowledgments-style headings, and add the ones the chain missed."""
     for heading in headings:
         heading.drop = bool(_DROP_HEADINGS.match(heading.title.rstrip(":")))
     return _with_drop_headings(lines, headings)
@@ -528,7 +634,9 @@ def _arabic_key(number: str) -> tuple[int, ...]:
     return tuple(int(part) for part in number.split("."))
 
 
-def _candidate(lines: list[str], i: int, key: tuple[int, ...], title: str) -> _Candidate | None:
+def _candidate(
+    lines: list[str], i: int, key: tuple[int, ...], title: str, doc: _Lines
+) -> _Candidate | None:
     """A heading candidate at line ``i``, after joining wrapped lines and splitting a run-in.
 
     ACM's numbered run-in headings put the paragraph on the same line
@@ -536,14 +644,15 @@ def _candidate(lines: list[str], i: int, key: tuple[int, ...], title: str) -> _C
     what precedes the first full stop and the rest, when it reads as a
     sentence rather than more title ("vs. SPEC CPU17, DCPerf"), is body text.
     """
-    title, span = _continue_title(title, lines, i)
+    title, span = _continue_title(title, lines, i, doc)
     rest = ""
     run_in = _RUN_IN.match(title)
     if run_in and sum(w.islower() for w in _WORD.findall(run_in["rest"])) >= 2:
         title, rest = run_in["title"], run_in["rest"]
     if not _valid_title(title):
         return None
-    return _Candidate(i, key, title, span, rest)
+    runs_on = not rest and i + span < len(lines) and lines[i + span][:1].islower()
+    return _Candidate(i, key, title, span, rest, runs_on)
 
 
 def _ieee_run_in(match: re.Match[str]) -> bool:
@@ -655,7 +764,9 @@ def _with_drop_headings(lines: list[str], headings: list[_Heading]) -> list[_Hea
 
 def _valid_title(title: str) -> bool:
     title = title.strip()
-    if not 2 <= len(title) <= 90 or len(title.split()) > 14:
+    # Long enough for a title that wrapped onto two lines; a line of running
+    # text is ruled out by the other checks and by the numbering chain.
+    if not 2 <= len(title) <= 120 or len(title.split()) > 16:
         return False
     if not title[0].isupper() or title.endswith((",", ";", ".")):
         return False
@@ -665,13 +776,16 @@ def _valid_title(title: str) -> bool:
     return sum(c.isalpha() for c in non_space) >= 0.6 * len(non_space)
 
 
-def _continue_title(title: str, lines: list[str], i: int) -> tuple[str, int]:
+def _continue_title(title: str, lines: list[str], i: int, doc: _Lines) -> tuple[str, int]:
     """Join a heading that wrapped onto the next line: (title, lines used).
 
     A wrap is recognizable when the title breaks inside a hyphenated word
     ("Matrix-Vector Mul-" / "tiplication"), when an all-caps title continues
-    with another short all-caps line, or when the next line is a fragment of
-    at most three lowercase words ("... without fault tolerant" / "technique").
+    with another short all-caps line, when the next line is a fragment of at
+    most three lowercase words ("... without fault tolerant" / "technique"),
+    when the title ends on a comma or a connector word, or when the next line
+    is a short Title Case fragment with running text after it ("... Signal
+    Processing and Deep" / "Learning").
     """
     if i + 1 >= len(lines):
         return title, 1
@@ -687,7 +801,30 @@ def _continue_title(title: str, lines: list[str], i: int) -> tuple[str, int]:
     dangling = title.endswith(",") or title.rsplit(None, 1)[-1].lower() in _CONNECTORS
     if dangling and len(words) <= 8 and nxt[:1].isupper() and not _SENTENCE_END.search(nxt):
         return f"{title} {nxt}", 2
+    # A Title Case fragment only continues a Title Case title that ran to the
+    # end of its line; a short title followed by a capitalized line is a
+    # heading followed by a sub-heading or an algorithm name ("FFT Engine" /
+    # "Theory of Operation"). The fragment's length cap keeps out run-in
+    # paragraphs that lost their spaces ("UltraAcceleratorLink. UALinkisan...").
+    wrapped = len(lines[i]) >= 0.5 * doc.median_len and _title_case(title) and not _all_caps(title)
+    fragment = (
+        len(words) <= 4 and len(nxt) <= 40 and _title_case(nxt) and not _SENTENCE_END.search(nxt)
+    )
+    prose_follows = i + 2 < len(lines) and _is_prose(lines[i + 2], doc)
+    if wrapped and fragment and prose_follows and not _starts_heading(nxt):
+        return f"{title} {nxt}", 2
     return title, 1
+
+
+def _title_case(text: str) -> bool:
+    """Starts with a capital and capitalizes every word of four letters or more."""
+    words = [w for w in text.split() if len(w) >= 4 and w[0].isalpha()]
+    return text[:1].isupper() and all(w[0].isupper() for w in words)
+
+
+def _starts_heading(line: str) -> bool:
+    patterns = (_ARABIC, _ROMAN, _LETTER, _LONE_NUMBER, _IEEE_RUN_IN, _APPENDIX_NUMBERED)
+    return any(p.match(line) for p in patterns)
 
 
 def _all_caps(text: str) -> bool:
@@ -837,13 +974,20 @@ def _rejoin(head: str, tail: str, vocabulary: set[str]) -> bool:
 
 
 def _after_abstract(lines: list[str]) -> list[str]:
-    """For heading-less papers: drop the title block and abstract when they are recognizable."""
+    """For heading-less papers: drop the title block and abstract when they are recognizable,
+    with the keyword line and a lone "Introduction" that may follow them."""
     for i, line in enumerate(lines[:80]):
         if _ABSTRACT_START.match(line):
             doc = _Lines(lines, _median_len(lines))
             for j in range(i, len(lines)):
                 if _ends_paragraph(lines[j], doc):
-                    return lines[j + 1 :]
+                    k = j + 1
+                    while k < len(lines) and (
+                        _FRONT_MATTER_END.match(lines[k])
+                        or lines[k].lower().rstrip(":") in _COMMON_SECTIONS
+                    ):
+                        k += 1
+                    return lines[k:]
     return lines
 
 
