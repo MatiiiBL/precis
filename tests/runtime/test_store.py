@@ -16,7 +16,7 @@ from precis.models import (
     StageStatus,
     Topic,
 )
-from precis.store import SchemaError, Store
+from precis.store import BatchItem, SchemaError, Store
 
 
 def _paper(pid: str, published: date, categories: list[str] | None = None) -> PaperMeta:
@@ -188,9 +188,10 @@ def test_older_schema_is_migrated(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     def add_column(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE artifacts ADD COLUMN note TEXT")
 
+    current = len(store_module.MIGRATIONS)
     monkeypatch.setattr(store_module, "MIGRATIONS", (*store_module.MIGRATIONS, add_column))
     with Store(path) as s:
-        assert s.schema_version == 2
+        assert s.schema_version == current + 1
         assert s.get_artifact("k") == 1
     columns = [r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(artifacts)")]
     assert "note" in columns
@@ -217,3 +218,31 @@ def test_reset_running_can_be_limited_to_some_stages(store: Store) -> None:
     assert store.reset_running([]) == 0
     assert store.reset_running() == 1
     assert store.papers_with_status(Stage.FETCH, StageStatus.PENDING) == ["p1"]
+
+
+def test_batches_are_recorded_until_collected(store: Store) -> None:
+    items = [
+        BatchItem(custom_id="req-1", request_hash="h1", stage="read", paper_id="p1"),
+        BatchItem(custom_id="req-2", request_hash="h2", stage="verify", paper_id=None),
+    ]
+    store.record_batch("msgbatch_1", items)
+    store.record_batch("msgbatch_2", items[:1])
+    assert store.open_batches() == [("msgbatch_1", items), ("msgbatch_2", items[:1])]
+
+    store.close_batch("msgbatch_1")
+    assert store.open_batches() == [("msgbatch_2", items[:1])]
+
+
+def test_version_1_store_gains_the_batches_table(tmp_path: Path) -> None:
+    path = tmp_path / "precis.db"
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+    db.execute("INSERT INTO schema_version VALUES (0)")
+    store_module.MIGRATIONS[0](db)
+    db.execute("UPDATE schema_version SET version = 1")
+    db.commit()
+    db.close()
+
+    with Store(path) as s:
+        assert s.schema_version == len(store_module.MIGRATIONS) >= 2
+        assert s.open_batches() == []

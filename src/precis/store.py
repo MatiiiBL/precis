@@ -19,6 +19,7 @@ import json
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
@@ -121,13 +122,41 @@ def _migrate_v1(db: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v2(db: sqlite3.Connection) -> None:
+    # Message batches that were sent, so that results a run did not wait for
+    # (an interrupt, a crash) are collected by the next one instead of being
+    # bought again.
+    _run_script(
+        db,
+        """
+        CREATE TABLE batches (
+            batch_id     TEXT PRIMARY KEY,
+            created_at   TEXT NOT NULL,
+            collected_at TEXT,
+            json         TEXT NOT NULL
+        );
+        CREATE INDEX batches_open ON batches (collected_at, created_at)
+        """,
+    )
+
+
 # MIGRATIONS[i] upgrades a store from schema version i to i + 1. Append only:
 # a released migration never changes, because stores in the wild have run it.
-MIGRATIONS: Sequence[Migration] = (_migrate_v1,)
+MIGRATIONS: Sequence[Migration] = (_migrate_v1, _migrate_v2)
 
 
 class SchemaError(RuntimeError):
     """The store was written by a newer version of précis than this one."""
+
+
+@dataclass(frozen=True)
+class BatchItem:
+    """One request inside a sent message batch, enough to file its result later."""
+
+    custom_id: str
+    request_hash: str
+    stage: str
+    paper_id: str | None
 
 
 def _now() -> str:
@@ -416,6 +445,33 @@ class Store:
     def cache_delete(self, request_hash: str) -> None:
         """Drop a cached response (one that can no longer be read back, say)."""
         self._db.execute("DELETE FROM response_cache WHERE request_hash = ?", (request_hash,))
+
+    # ------------------------------------------------------------------
+    # message batches
+    # ------------------------------------------------------------------
+
+    def record_batch(self, batch_id: str, items: Sequence[BatchItem]) -> None:
+        """Remember a batch as soon as it is created, until its results are collected."""
+        self._db.execute(
+            "INSERT OR REPLACE INTO batches (batch_id, created_at, json) VALUES (?, ?, ?)",
+            (batch_id, _now(), json.dumps([asdict(item) for item in items])),
+        )
+
+    def open_batches(self) -> list[tuple[str, list[BatchItem]]]:
+        """Batches whose results have not been collected yet, oldest first."""
+        rows = self._db.execute(
+            "SELECT batch_id, json FROM batches WHERE collected_at IS NULL "
+            "ORDER BY created_at, batch_id"
+        )
+        return [
+            (batch_id, [BatchItem(**item) for item in json.loads(raw)]) for batch_id, raw in rows
+        ]
+
+    def close_batch(self, batch_id: str) -> None:
+        """Mark a batch's results as collected (or the batch as gone)."""
+        self._db.execute(
+            "UPDATE batches SET collected_at = ? WHERE batch_id = ?", (_now(), batch_id)
+        )
 
     # ------------------------------------------------------------------
     # runs and corpus artifacts
