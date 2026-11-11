@@ -89,7 +89,7 @@ async def send(
     params: dict[str, Any],
     *,
     stage: str,
-    paper_id: str,
+    paper_id: str | None,
     trace: AgentTrace,
 ) -> Reply:
     """Send one request, handling the stop reasons no caller can work with.
