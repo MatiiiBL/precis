@@ -13,7 +13,7 @@ from precis.llm import (
     UnpricedModelError,
 )
 from precis.llm.clock import ManualClock
-from precis.llm.fake import FakeAnthropic, FakeReply, Faults
+from precis.llm.fake import FakeAnthropic, FakeReply, Faults, ServerLimits
 from precis.llm.pricing import cost
 from precis.store import Store
 
@@ -239,3 +239,41 @@ def test_unpriced_model_is_a_configuration_error(
 ) -> None:
     with pytest.raises(UnpricedModelError, match="claude-unknown"):
         gateway(fake, store, clock, agents={"reader": {"model": "claude-unknown"}})
+
+
+async def test_concurrency_grows_back_to_the_ceiling(store: Store, clock: ManualClock) -> None:
+    fake = FakeAnthropic([echo], clock=clock)
+    fake.fail_next("overloaded")
+    gw = gateway(fake, store, clock, limits={"initial_concurrency": 6, "max_concurrency": 6})
+    await gw.create(request("first"), stage="read")
+    assert gw.stats().concurrency_limit == 3
+
+    limits = []
+    for i in range(20):
+        await gw.create(request(f"next {i}"), stage="read")
+        limits.append(gw.stats().concurrency_limit)
+    # +1 per window of successes (the retried first request is the first
+    # success): 3 -> 4 after 3, -> 5 after 4 more, -> 6 after 5 more.
+    assert limits[:2] == [3, 4]
+    assert limits.index(5) == 5
+    assert limits.index(6) == 10
+    assert set(limits[10:]) == {6}
+
+
+async def test_rate_limits_are_learned_from_headers(store: Store, clock: ManualClock) -> None:
+    fake = FakeAnthropic([echo], clock=clock, limits=ServerLimits(rpm=50, itpm=40_000, otpm=8_000))
+    gw = gateway(fake, store, clock, limits={"otpm": 4_000})
+    assert gw.stats().rpm_limit is None
+    await gw.create(request(), stage="read")
+    stats = gw.stats()
+    assert (stats.rpm_limit, stats.itpm_limit, stats.otpm_limit) == (50, 40_000, 4_000)
+
+
+async def test_client_side_limits_prevent_429s(store: Store, clock: ManualClock) -> None:
+    fake = FakeAnthropic([echo], clock=clock, limits=ServerLimits(rpm=10, itpm=10**6, otpm=10**6))
+    gw = gateway(fake, store, clock, limits={"rpm": 10, "burst_s": 6})
+    for i in range(12):
+        await gw.create(request(f"q{i}"), stage="read")
+    assert fake.count("429") == 0
+    # One request's worth of burst, then one every six seconds.
+    assert clock.now() >= 6 * 11 - 1
