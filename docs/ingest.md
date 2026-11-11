@@ -98,7 +98,18 @@ All requests, to the API and to arxiv.org, go through one `ArxivHttp`:
 - one `RateLimiter` starts requests at least `fetch.min_interval_s` (3 s)
   apart across every task, so four fetch workers still make one request
   every 3 s;
-- every request carries `fetch.user_agent`;
+- every request carries `fetch.user_agent`. The default, `precis/<version>`,
+  names the tool but nobody to contact; before a large run, add a contact
+  so arXiv can reach you instead of blocking an unknown heavy client:
+
+  ```toml
+  # precis.toml
+  [fetch]
+  user_agent = "precis/0.1.0 (mailto:you@example.org)"
+  ```
+
+  The default deliberately carries no address, so nobody's is sent unless
+  they configure it;
 - 429, 5xx, timeouts and connection errors retry with exponential backoff
   and full jitter (a random wait up to 2 s, 4 s, 8 s, ..., at most 60 s), up to
   `fetch.max_attempts`. A `Retry-After` header (seconds or HTTP date,
@@ -358,7 +369,7 @@ Configuration (`[fetch]` in `precis.toml`):
 | Key | Default | |
 |---|---|---|
 | `min_interval_s` | 3.0 | gap between request starts |
-| `user_agent` | `precis/<version>` | sent with every request |
+| `user_agent` | `precis/<version>` | sent with every request; add a contact (see above) |
 | `prefer` | `"html"` | `"pdf"` skips the HTML |
 | `raw_dir` | `data/raw` | downloaded files |
 | `page_size` | 200 | results per API request |

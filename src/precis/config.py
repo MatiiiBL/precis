@@ -126,7 +126,13 @@ class FetchConfig(Record):
     min_interval_s: float = Field(
         default=3.0, ge=0, description="Gap between requests to arXiv (their published guidance)."
     )
-    user_agent: str = f"precis/{__version__}"
+    user_agent: str = Field(
+        default=f"precis/{__version__}",
+        description=(
+            "Sent with every arXiv request. Add a contact so arXiv can reach a heavy "
+            'client instead of blocking it: "precis/0.1.0 (mailto:you@example.org)".'
+        ),
+    )
     prefer: Literal["html", "pdf"] = "html"
     raw_dir: Path = Path("data/raw")
     page_size: int = Field(
