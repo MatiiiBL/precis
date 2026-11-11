@@ -20,6 +20,18 @@ from precis.agents.trace import AgentTrace
 from precis.config import AgentConfig, CacheTTL
 from precis.llm import ModelGateway, Reply
 
+REQUEST_FORMAT_VERSION = 1
+"""Version of everything the agents send that is written in code, not in a prompt file.
+
+That is: the first messages (``reader_brief``, ``critic_brief``,
+``reviser_brief``, the full-text, notes and combine messages), the finish
+hints, the nudge and the budget notice, the header, outline, page and caption
+rendering, the tool result texts, and the validation limits and messages.
+Bump it with any change to one of these; it is part of every stage's
+``config_hash``, so the change re-runs the stages it affects. Prompt files
+and tool schemas are versioned by their own hashes.
+"""
+
 
 def cache_control(ttl: CacheTTL) -> dict[str, str]:
     """A cache breakpoint; the 5-minute lifetime is the API default and is left implicit."""

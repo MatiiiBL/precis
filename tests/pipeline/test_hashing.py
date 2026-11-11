@@ -1,8 +1,30 @@
+import pytest
+
+from precis.agents import messages
 from precis.config import AgentConfig, AgentsConfig
 from precis.models import ClaimCheck, PaperSummary, Verdict, Verification
 from precis.pipeline.hashing import read_hash, revise_hash, verify_hash
 
 from .helpers import paper
+
+
+def test_every_stage_hash_covers_the_request_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    meta, doc = paper(0)
+    config = AgentsConfig()
+    check = ClaimCheck(target="tldr", verdict=Verdict.UNSUPPORTED, evidence="", note="n")
+    verification = Verification(paper_id=meta.id, revision=0, checks=[check])
+
+    def hashes() -> list[str]:
+        return [
+            read_hash(config, meta, doc),
+            verify_hash(config, meta, doc, summary()),
+            revise_hash(config, meta, doc, summary(), verification),
+        ]
+
+    before = hashes()
+    monkeypatch.setattr(messages, "REQUEST_FORMAT_VERSION", messages.REQUEST_FORMAT_VERSION + 1)
+    after = hashes()
+    assert all(b != a for b, a in zip(before, after, strict=True))
 
 
 def summary(tldr: str = "Design0 is fast.") -> PaperSummary:

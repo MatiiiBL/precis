@@ -3,8 +3,9 @@
 A stage is skipped when a ``done`` record with the same hash exists, so the
 hash covers everything that determines the stage's output: the model
 settings of every role the stage runs, the versions of the prompts and tool
-definitions it sends, the options that shape its requests, and the inputs it
-reads (the document, or the summary and verification of the stage before).
+definitions it sends, ``REQUEST_FORMAT_VERSION`` for the request text written
+in code, the options that shape its requests, and the inputs it reads (the
+document, or the summary and verification of the stage before).
 Including the inputs means that a changed summary re-runs its verification
 even when no setting changed.
 """
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from precis.agents import messages
 from precis.agents.critic import CHECKS_SCHEMA
 from precis.agents.prompts import PromptName, load_prompt
 from precis.agents.submissions import SUMMARY_SCHEMA
@@ -33,6 +35,11 @@ _TOOLS_VERSION = sha256_hex(canonical_json([READING_TOOLS, SUMMARY_SCHEMA, CHECK
 
 def _hash(parts: dict[str, Any]) -> str:
     return sha256_hex(canonical_json(parts))[:16]
+
+
+def _stage_hash(parts: dict[str, Any]) -> str:
+    """A stage hash also covers the request text written in code (briefs, notices, rendering)."""
+    return _hash({**parts, "format": messages.REQUEST_FORMAT_VERSION})
 
 
 def _role(config: AgentConfig) -> dict[str, Any]:
@@ -67,7 +74,7 @@ def read_hash(config: AgentsConfig, meta: PaperMeta, doc: Document) -> str:
         options |= _reading_options(config)
     elif config.strategy == "mapreduce":
         options |= {"page_tokens": config.page_tokens, "chunk_tokens": config.chunk_tokens}
-    return _hash(
+    return _stage_hash(
         {
             "stage": "read",
             "strategy": config.strategy,
@@ -80,7 +87,7 @@ def read_hash(config: AgentsConfig, meta: PaperMeta, doc: Document) -> str:
 
 
 def verify_hash(config: AgentsConfig, meta: PaperMeta, doc: Document, summary: PaperSummary) -> str:
-    return _hash(
+    return _stage_hash(
         {
             "stage": "verify",
             "critic": _role(config.critic),
@@ -102,7 +109,7 @@ def revise_hash(
     verification: Verification,
 ) -> str:
     """The revise stage also re-verifies, so the critic's settings count too."""
-    return _hash(
+    return _stage_hash(
         {
             "stage": "revise",
             "enabled": config.revise,
