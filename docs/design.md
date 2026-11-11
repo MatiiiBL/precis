@@ -37,10 +37,22 @@ command only does the missing or changed work.
 summary (`revision = 1`), and the new summary is verified again so the report
 can show faithfulness before and after revision.
 
+Stage outputs (`StageRecord.output`):
+
+| Stage | Output | Notes |
+|---|---|---|
+| `read` | `PaperSummary` (revision 0) | |
+| `verify` | `Verification` of revision 0 | never overwritten |
+| `revise` | `RevisionResult` (summary revision 1 and its verification) | `skipped` when the verification passed or revision is off |
+
+A paper's final summary is the `revise` summary when that stage is `done`,
+and the `read` summary otherwise; its final verification follows the same
+rule.
+
 ## 2. Records
 
 `src/precis/models.py` defines every record that crosses a package boundary
-(`PaperMeta`, `Document`, `PaperSummary`, `Verification`, `Topic`,
+(`PaperMeta`, `Document`, `PaperSummary`, `Verification`, `RevisionResult`, `Topic`,
 `TopicSynthesis`, `CorpusReport`, `StageRecord`, `LLMCall`, `UsageRow`).
 Read it; the field descriptions are part of this contract.
 

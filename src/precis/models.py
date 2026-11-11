@@ -139,6 +139,17 @@ class Verification(Record):
         return sum(c.verdict is Verdict.SUPPORTED for c in self.checks) / len(self.checks)
 
 
+class RevisionResult(Record):
+    """Output of the revise stage: the rewritten summary and its re-verification.
+
+    The first draft and its verification stay in the read and verify stage
+    records, so faithfulness can be compared before and after revision.
+    """
+
+    summary: PaperSummary = Field(description="The rewritten summary (revision 1).")
+    verification: Verification = Field(description="Verification of the rewritten summary.")
+
+
 # --------------------------------------------------------------------------
 # Corpus outputs
 # --------------------------------------------------------------------------
