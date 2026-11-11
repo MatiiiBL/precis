@@ -1,7 +1,13 @@
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from precis.text.document import SectionDraft, build_document, split_into_parts
+from precis.text.document import (
+    SectionDraft,
+    build_document,
+    split_into_parts,
+    strip_acknowledgment,
+)
 from precis.text.normalize import clean_chars, fix_surrogates, join_paragraphs, squash
 from precis.util import estimate_tokens
 
@@ -103,6 +109,36 @@ def test_surrogates_are_recombined_or_dropped() -> None:
     # clean_chars, which every parser uses, also plain-letters the result.
     assert clean_chars(f"{high}{low}{high}") == "a"
     clean_chars(f"{high}x").encode("utf-8")  # encodable: no surrogate left
+
+
+@pytest.mark.parametrize(
+    ("paragraph", "kept"),
+    [
+        # 2507.10912: a bold run-in at the start of the last paragraph.
+        (
+            "Acknowledgment This work is sponsored by the National Science Foundation "
+            "under Grant No. CCF2403134.",
+            "",
+        ),
+        ("Our results hold. Acknowledgments: We thank the reviewers.", "Our results hold."),
+        ("Acknowledgements. The authors thank X.", ""),
+        ("ACKNOWLEDGMENT The authors thank X.", ""),
+        # Not acknowledgments: the word inside a sentence, or another word.
+        ("Acknowledging the limits, we restrict the study.", None),
+        ("As the acknowledgments note, Section 3 relies on it.", None),
+        ("We list grants in the Acknowledgments. That is all.", None),
+    ],
+)
+def test_run_in_acknowledgments_are_cut(paragraph: str, kept: str | None) -> None:
+    assert strip_acknowledgment(paragraph) == (paragraph if kept is None else kept)
+
+
+def test_build_document_drops_acknowledgment_paragraphs() -> None:
+    drafts = [
+        SectionDraft("Conclusion", 1, ["We conclude.", "Acknowledgment This work is funded."])
+    ]
+    doc = build_document("p", "html", drafts, [], "sha")
+    assert doc.sections[0].text == "We conclude."
 
 
 def test_clean_chars_expands_ligatures_and_math_letters() -> None:

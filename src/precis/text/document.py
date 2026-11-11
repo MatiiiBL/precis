@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from precis.models import Caption, Document, Section
@@ -26,6 +26,9 @@ MAX_LEVEL = 4
 PART_TOKENS = 1500
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(\[])")
+# A run-in acknowledgment, at the start of a paragraph or after a sentence:
+# "Acknowledgment This work is sponsored by ...", "Acknowledgments. We thank ...".
+_ACKNOWLEDGMENT = re.compile(r"(?:^|(?<=[.!?]\s))(?i:acknowledge?ments?)\b\W*(?=[A-Z])")
 
 
 class ParseError(Exception):
@@ -53,8 +56,12 @@ def build_document(
     captions: list[Caption],
     sha256: str,
 ) -> Document:
-    """Assign ids and levels, drop empty leaf sections, and count tokens."""
-    sections = _assign_ids(_prune_empty(list(drafts)))
+    """Drop run-in acknowledgments and empty leaf sections, assign ids and levels, count tokens."""
+    cleaned = [
+        replace(d, paragraphs=[p for p in map(strip_acknowledgment, d.paragraphs) if p])
+        for d in drafts
+    ]
+    sections = _assign_ids(_prune_empty(cleaned))
     return Document(
         paper_id=paper_id,
         source_format=source_format,
@@ -63,6 +70,17 @@ def build_document(
         n_tokens=sum(s.n_tokens for s in sections),
         sha256=sha256,
     )
+
+
+def strip_acknowledgment(paragraph: str) -> str:
+    """Cut a run-in acknowledgment and everything after it in the paragraph.
+
+    Acknowledgments under their own heading are dropped by the parsers; this
+    catches the ones written as a bold lead-in to the last paragraph, whose
+    grant numbers would otherwise read as results of the paper.
+    """
+    match = _ACKNOWLEDGMENT.search(paragraph)
+    return paragraph[: match.start()].rstrip() if match else paragraph
 
 
 def _prune_empty(drafts: list[SectionDraft]) -> list[SectionDraft]:

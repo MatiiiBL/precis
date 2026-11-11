@@ -153,6 +153,19 @@ def test_paragraphs_lists_run_in_titles_and_unconverted_macros() -> None:
     ]
 
 
+def test_a_run_in_acknowledgment_paragraph_is_dropped() -> None:
+    """2507.10912: a bold "Acknowledgment" lead-in, not a section, in the conclusion."""
+    acknowledgment = (
+        '<div class="ltx_para"><p class="ltx_p">'
+        '<span class="ltx_text ltx_font_bold">Acknowledgment</span> This work is sponsored '
+        "by the National Science Foundation under Grant No. CCF2403134.</p></div>"
+    )
+    doc = _parse(
+        section("S6", "6", "Conclusions", para("FuseMap improves ADP by 9%."), acknowledgment)
+    )
+    assert doc.sections[0].text == "FuseMap improves ADP by 9%."
+
+
 def test_front_matter_notes_are_not_mistaken_for_body_text() -> None:
     note = (
         '<span class="ltx_note ltx_role_footnotetext"><span class="ltx_note_outer">'
