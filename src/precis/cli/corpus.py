@@ -31,7 +31,7 @@ from precis.corpus.synthesis import (
     write_report,
 )
 from precis.corpus.topics import TOPICS_ARTIFACT, TopicModel, build_topics
-from precis.llm import AsyncAnthropicLike, Gateway, make_client
+from precis.llm import AsyncAnthropicLike, Clock, Gateway, make_client
 from precis.models import CorpusReport
 from precis.offline import offline_client
 from precis.store import Store
@@ -66,7 +66,8 @@ async def with_gateway[T](
     command: str,
     work: Callable[[Gateway], Awaitable[T]],
     *,
-    offline: bool,
+    client: AsyncAnthropicLike,
+    clock: Clock | None = None,
 ) -> tuple[T, Gateway]:
     """Run ``work`` with a gateway that is recorded as its own run in the store.
 
@@ -75,7 +76,7 @@ async def with_gateway[T](
     """
     run_id = f"{command}-{datetime.now(UTC):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:6]}"
     store.start_run(run_id, {"command": command, "config": config.model_dump(mode="json")})
-    gateway = Gateway(model_client(config, offline=offline), store, run_id=run_id, config=config)
+    gateway = Gateway(client, store, run_id=run_id, config=config, clock=clock)
     try:
         result = await work(gateway)
     finally:
@@ -158,7 +159,8 @@ def topics_command(
         async def work(gw: Gateway) -> TopicModel:
             return await build_topics(gw, papers, config.corpus, agent, k=k)
 
-        model, gateway = asyncio.run(with_gateway(store, config, "topics", work, offline=offline))
+        client = model_client(config, offline=offline)
+        model, gateway = asyncio.run(with_gateway(store, config, "topics", work, client=client))
         store.put_artifact(TOPICS_ARTIFACT, model)
     console.print(_topics_table(model))
     if model.silhouette:
@@ -193,7 +195,9 @@ def report_command(
             )
 
         (report, stats), gateway = asyncio.run(
-            with_gateway(store, config, "report", work, offline=offline)
+            with_gateway(
+                store, config, "report", work, client=model_client(config, offline=offline)
+            )
         )
         stats = stats.model_copy(update={"topics_digest": topics_digest(model)})
         store.put_artifact(REPORT_ARTIFACT, report)

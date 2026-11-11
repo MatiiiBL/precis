@@ -17,14 +17,17 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from precis.config import AgentConfig
+from precis.config import AgentConfig, AgentsConfig
 from precis.eval.judge import coverage, key_points
 from precis.eval.metrics import Estimate, Rouge, bootstrap, mean_rouge, rouge, summary_text
 from precis.eval.results import markdown_table
+from precis.eval.runs import Paper, summarize_papers
+from precis.llm import Clock, Gateway
 from precis.llm.base import ModelGateway
 from precis.models import PaperMeta, PaperSummary
+from precis.store import Store
 
 
 class AbstractScore(BaseModel):
@@ -45,6 +48,8 @@ class AbstractEval(BaseModel):
     recall: Estimate
     rouge_l: Estimate
     scores: list[AbstractScore]
+    strategy: str = ""
+    failed: list[str] = Field(default_factory=list, description="Papers whose summary failed.")
 
 
 async def score_paper(
@@ -85,6 +90,22 @@ async def score_against_abstracts(
     )
 
 
+async def evaluate_abstract(
+    gw: Gateway,
+    store: Store,
+    clock: Clock,
+    papers: Sequence[Paper],
+    agents: AgentsConfig,
+    *,
+    seed: int = 0,
+) -> AbstractEval:
+    """Summarize ``papers`` without the abstract (with ``agents.strategy``) and score them."""
+    run = await summarize_papers(gw, store, clock, papers, agents, agents.strategy)
+    items = [(p.meta, p.summary) for p in run.papers]
+    result = await score_against_abstracts(gw, items, agents.judge, seed=seed)
+    return result.model_copy(update={"strategy": run.strategy, "failed": run.failed})
+
+
 def _interval(e: Estimate) -> str:
     return f"{e.mean:.3f} [{e.low:.3f}, {e.high:.3f}]"
 
@@ -96,9 +117,12 @@ def abstract_markdown(result: AbstractEval, *, model: str) -> str:
         ["ROUGE-L F1", _interval(result.rouge_l), f"{result.rouge_mismatched.rougeL:.3f}"],
         ["Key-point recall", _interval(result.recall), ""],
     ]
+    strategy = f" ({result.strategy} strategy)" if result.strategy else ""
+    failed = f"; {len(result.failed)} failed to summarize" if result.failed else ""
     return (
         f"# Summaries written without the abstract, compared with it\n\n"
-        f"{result.papers} papers; key points extracted and judged by `{model}`. "
+        f"{result.papers} papers{strategy}{failed}; key points extracted and judged by "
+        f"`{model}`. "
         "Brackets are 95% bootstrap intervals; the mismatched column pairs each summary "
         "with another paper's abstract.\n\n"
         + markdown_table(["Metric", "Own abstract", "Mismatched abstract"], rows)
