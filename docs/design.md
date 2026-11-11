@@ -41,6 +41,7 @@ Stage outputs (`StageRecord.output`):
 
 | Stage | Output | Notes |
 |---|---|---|
+| `fetch` | `{version, source_format, n_tokens, n_sections, n_captions, fallback_reason}` | the `Document` itself is stored with `put_document` |
 | `read` | `PaperSummary` (revision 0) | |
 | `verify` | `Verification` of revision 0 | never overwritten |
 | `revise` | `RevisionResult` (summary revision 1 and its verification) | `skipped` when the verification passed or revision is off |
@@ -202,8 +203,8 @@ details in the Anthropic API docs):
 
 ## 6. Ingest (`precis.sources`, `precis.text`)
 
-- `sources.arxiv`: search the arXiv API by category and submission date
-  range (Atom feed, paged), and download full text. HTML from
+- `sources.arxiv` searches the arXiv API by category and submission date
+  range (Atom feed, paged); `sources.fulltext` downloads full text. HTML from
   `https://arxiv.org/html/<id>v<version>` is preferred because it keeps the
   section structure; the PDF is the fallback. All arXiv requests share one
   limiter (`fetch.min_interval_s`, 3 s by default) and send
