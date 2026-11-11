@@ -39,6 +39,7 @@ class AgentConfig(Record):
 class AgentsConfig(Record):
     reader: AgentConfig = AgentConfig()
     critic: AgentConfig = AgentConfig()
+    reviser: AgentConfig = AgentConfig()
     synthesizer: AgentConfig = AgentConfig(effort="high", max_turns=1)
     judge: AgentConfig = AgentConfig(effort="low", max_turns=1)
     strategy: Literal["agentic", "fulltext", "mapreduce"] = "agentic"
@@ -46,6 +47,13 @@ class AgentsConfig(Record):
         default=True, description="Show the author abstract to the reader (off for evaluation)."
     )
     revise: bool = Field(default=True, description="Rewrite summaries that fail verification once.")
+    page_tokens: int = Field(
+        default=2500, gt=0, description="Size of one read_section page, in estimated tokens."
+    )
+    search_results: int = Field(default=5, gt=0, description="Passages returned by search_paper.")
+    chunk_tokens: int = Field(
+        default=8000, gt=0, description="Body tokens per note-taking request (mapreduce)."
+    )
 
 
 class LimitsConfig(Record):
