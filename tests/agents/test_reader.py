@@ -97,6 +97,15 @@ async def test_request_shape() -> None:
     assert "<outline>\nBody:" in brief
 
 
+async def test_one_hour_cache_lifetime() -> None:
+    gw = ScriptedGateway([tool_turn(SUBMIT)])
+    await read(gw, cache_ttl="1h")
+    params = gw.requests[0]
+    one_hour = {"type": "ephemeral", "ttl": "1h"}
+    assert params["cache_control"] == one_hour
+    assert params["system"][0]["cache_control"] == one_hour
+
+
 async def test_requests_are_deterministic() -> None:
     first, second = ScriptedGateway([tool_turn(SUBMIT)]), ScriptedGateway([tool_turn(SUBMIT)])
     await read(first)

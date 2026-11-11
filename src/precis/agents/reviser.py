@@ -74,6 +74,7 @@ async def run_reviser(
         brief=reviser_brief(view, summary, verification),
         submit=summary_tool(view),
         finish_hint=REVISER_FINISH,
+        cache_ttl=config.cache_ttl,
     )
     result = await run_agent(gw, spec, tools, config.reviser, paper_id=meta.id)
     revised = PaperSummary(

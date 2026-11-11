@@ -23,7 +23,7 @@ from precis.agents.reader import run_reader
 from precis.agents.submissions import SUMMARY_SCHEMA, SubmissionRejected, parse_summary
 from precis.agents.tools import PassageIndex
 from precis.agents.trace import AgentResult, AgentTrace
-from precis.config import AgentConfig, AgentsConfig
+from precis.config import AgentConfig, AgentsConfig, CacheTTL
 from precis.llm import ModelGateway, Reply
 from precis.models import Document, PaperMeta, PaperSummary, SummaryDraft
 from precis.util import estimate_tokens
@@ -44,11 +44,13 @@ async def structured_summary(
     system: Prompt,
     user: str,
     trace: AgentTrace,
+    *,
+    ttl: CacheTTL,
 ) -> SummaryDraft:
     """One structured-output request for a ``SummaryDraft``, plus one repair turn."""
     messages: list[dict[str, Any]] = [{"role": "user", "content": user}]
     for attempt in range(2):
-        params = base_params(config, system, messages)
+        params = base_params(config, system, messages, ttl=ttl)
         params["output_config"] = {
             **params["output_config"],
             "format": {"type": "json_schema", "schema": SUMMARY_SCHEMA},
@@ -83,7 +85,9 @@ async def run_fulltext(
     view = PaperView(meta, doc, page_tokens=config.page_tokens)
     trace = AgentTrace()
     user = fulltext_message(view, include_abstract=config.include_abstract)
-    draft = await structured_summary(gw, view, config.reader, load_prompt("fulltext"), user, trace)
+    draft = await structured_summary(
+        gw, view, config.reader, load_prompt("fulltext"), user, trace, ttl=config.cache_ttl
+    )
     trace.tokens_read, trace.fraction_read = doc.n_tokens, 1.0
     return AgentResult(PaperSummary(paper_id=meta.id, **draft.model_dump()), trace)
 
@@ -166,14 +170,17 @@ async def run_mapreduce(
 
     async def take_notes(number: int, chunk: list[str]) -> str:
         user = notes_message(view, chunk, number, len(chunks))
-        params = base_params(config.reader, notes_prompt, [{"role": "user", "content": user}])
+        messages = [{"role": "user", "content": user}]
+        params = base_params(config.reader, notes_prompt, messages, ttl=config.cache_ttl)
         reply = await send(gw, params, stage="read", paper_id=meta.id, trace=trace)
         return _check_text_reply(reply)
 
     notes = await gather_all(take_notes(i, chunk) for i, chunk in enumerate(chunks, 1))
     user = combine_message(view, notes, include_abstract=config.include_abstract)
     combine = load_prompt("mapreduce_combine")
-    draft = await structured_summary(gw, view, config.reader, combine, user, trace)
+    draft = await structured_summary(
+        gw, view, config.reader, combine, user, trace, ttl=config.cache_ttl
+    )
     trace.tokens_read, trace.fraction_read = doc.n_tokens, 1.0
     return AgentResult(PaperSummary(paper_id=meta.id, **draft.model_dump()), trace)
 

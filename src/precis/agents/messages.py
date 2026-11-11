@@ -17,20 +17,23 @@ from anthropic.types.beta import BetaToolUseBlock
 from precis.agents.errors import AgentError, AgentRefused
 from precis.agents.prompts import Prompt
 from precis.agents.trace import AgentTrace
-from precis.config import AgentConfig
+from precis.config import AgentConfig, CacheTTL
 from precis.llm import ModelGateway, Reply
 
-EPHEMERAL = {"type": "ephemeral"}
+
+def cache_control(ttl: CacheTTL) -> dict[str, str]:
+    """A cache breakpoint; the 5-minute lifetime is the API default and is left implicit."""
+    return {"type": "ephemeral", "ttl": "1h"} if ttl == "1h" else {"type": "ephemeral"}
 
 
 def base_params(
-    config: AgentConfig, system: Prompt, messages: list[dict[str, Any]]
+    config: AgentConfig, system: Prompt, messages: list[dict[str, Any]], *, ttl: CacheTTL
 ) -> dict[str, Any]:
     """Parameters every request starts from; callers add tools or an output format."""
     return {
         "model": config.model,
         "max_tokens": config.max_tokens,
-        "system": [{"type": "text", "text": system.text, "cache_control": EPHEMERAL}],
+        "system": [{"type": "text", "text": system.text, "cache_control": cache_control(ttl)}],
         "messages": list(messages),
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": config.effort},

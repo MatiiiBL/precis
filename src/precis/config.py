@@ -36,6 +36,9 @@ class AgentConfig(Record):
     )
 
 
+CacheTTL = Literal["5m", "1h"]
+
+
 class AgentsConfig(Record):
     reader: AgentConfig = AgentConfig()
     critic: AgentConfig = AgentConfig()
@@ -53,6 +56,11 @@ class AgentsConfig(Record):
     search_results: int = Field(default=5, gt=0, description="Passages returned by search_paper.")
     chunk_tokens: int = Field(
         default=8000, gt=0, description="Body tokens per note-taking request (mapreduce)."
+    )
+    cache_ttl: CacheTTL = Field(
+        default="5m",
+        description="Prompt-cache lifetime of agent requests; 1h writes cost 2x instead of 1.25x "
+        "but survive longer gaps between turns.",
     )
 
 

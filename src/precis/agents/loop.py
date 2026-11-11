@@ -22,10 +22,10 @@ from typing import Any
 
 from precis.agents.errors import AgentError
 from precis.agents.messages import (
-    EPHEMERAL,
     ToolCall,
     assistant_turn,
     base_params,
+    cache_control,
     send,
     tool_calls,
     tool_result,
@@ -34,10 +34,11 @@ from precis.agents.prompts import Prompt
 from precis.agents.submissions import SubmissionRejected, SubmitTool
 from precis.agents.tools import READING_TOOL_NAMES, READING_TOOLS, ReadingTools, ToolOutput
 from precis.agents.trace import AgentResult, AgentTrace
-from precis.config import AgentConfig
+from precis.config import AgentConfig, CacheTTL
 from precis.llm import ModelGateway
 
 log = logging.getLogger(__name__)
+
 # The budget notice goes out when this share of the token budget is spent,
 # or when this many turns are left.
 NOTICE_FRACTION = 0.8
@@ -57,6 +58,7 @@ class AgentSpec[T]:
     submit: SubmitTool[T]
     finish_hint: str
     """What to do when the budget runs out, e.g. "Call submit_summary with ..."."""
+    cache_ttl: CacheTTL
 
 
 async def run_agent[T](
@@ -94,9 +96,9 @@ async def run_agent[T](
             messages.append({"role": "system", "content": _budget_notice(trace, config, spec)})
             trace.budget_notices += 1
 
-        params = base_params(config, spec.system, messages)
+        params = base_params(config, spec.system, messages, ttl=spec.cache_ttl)
         params["tools"] = definitions
-        params["cache_control"] = EPHEMERAL
+        params["cache_control"] = cache_control(spec.cache_ttl)
         reply = await send(gw, params, stage=spec.stage, paper_id=paper_id, trace=trace)
 
         if reply.stop_reason not in ("tool_use", "end_turn", "stop_sequence", "pause_turn"):
