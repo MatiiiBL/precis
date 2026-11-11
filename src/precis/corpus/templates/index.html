@@ -3,7 +3,7 @@
 {% block content %}
 <section class="hero">
   <h1>{{ site_title }}</h1>
-  <p class="lede">{{ "{:,}".format(facts.papers) }} papers{% if facts.first and facts.first == facts.last %} published on {{ facts.first.isoformat() }}{% elif facts.first %} published {{ facts.first.isoformat() }} to {{ facts.last.isoformat() }}{% endif %}, read and summarized by LLM agents, every claim checked against the paper, and mapped into {{ topics | length }} topics.</p>
+  <p class="lede">{{ facts.papers | count("paper") }}{% if facts.first and facts.first == facts.last %} published on {{ facts.first.isoformat() }}{% elif facts.first %} published {{ facts.first.isoformat() }} to {{ facts.last.isoformat() }}{% endif %}, read and summarized by LLM agents, every claim checked against the paper, and mapped into {{ topics | length | count("topic") }}.</p>
 </section>
 
 <section class="tiles" aria-label="Corpus at a glance">
@@ -30,7 +30,7 @@
   <div class="cards">
     {% for topic in topics %}
     <a class="card" href="topics/{{ topic.id }}.html">
-      <span class="card-kicker">{{ topic.paper_ids | length }} papers</span>
+      <span class="card-kicker">{{ topic.paper_ids | length | count("paper") }}</span>
       <span class="card-title">{{ topic.label }}</span>
       <span class="card-text">{{ topic.description }}</span>
       {{ chips(topic.keywords[:5]) }}

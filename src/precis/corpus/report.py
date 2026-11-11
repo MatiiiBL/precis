@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from precis.corpus.load import FinishedPaper
-from precis.corpus.markup import arxiv_links, link_citations, slugify
+from precis.corpus.markup import arxiv_links, count, link_citations, slugify
 from precis.corpus.stats import Faithfulness, Spend, corpus_facts
 from precis.corpus.synthesis import ReportStats
 from precis.models import CorpusReport, Topic, Verdict
@@ -47,8 +47,8 @@ def render_report(
     out = [
         f"# {report.title}",
         "",
-        f"*{report.n_papers} papers published {span}, in {len(topics)} topics. "
-        f"Generated {report.generated_at:%Y-%m-%d}.*",
+        f"*{count(report.n_papers, 'paper')} published {span}, in "
+        f"{count(len(topics), 'topic')}. Generated {report.generated_at:%Y-%m-%d}.*",
         "",
         "## Contents",
         "",
@@ -56,13 +56,14 @@ def render_report(
     ]
     for topic in topics:
         heading = _topic_heading(topic)
-        out.append(f"- [{heading}](#{slugify(heading)}) ({len(topic.paper_ids)} papers)")
+        out.append(f"- [{heading}](#{slugify(heading)}) ({count(len(topic.paper_ids), 'paper')})")
     out += ["- [About this report](#about-this-report)", "", "## Introduction", ""]
     out += [report.introduction.strip(), ""]
 
     for topic in topics:
+        size = count(len(topic.paper_ids), "paper")
         out += [f"## {_topic_heading(topic)}", ""]
-        out += [f"*{len(topic.paper_ids)} papers. Keywords: {', '.join(topic.keywords)}.*", ""]
+        out += [f"*{size}. Keywords: {', '.join(topic.keywords)}.*", ""]
         out += [topic.description, ""]
         synthesis = syntheses.get(topic.id)
         if synthesis is None:
@@ -105,6 +106,9 @@ def render_report(
             f"- Citations: {stats.citations} kept; {stats.invalid_citations} removed because "
             "they named a paper outside the topic."
         )
+        if stats.failed:
+            missing = ", ".join(str(f.topic_id) for f in stats.failed)
+            out.append(f"- No synthesis could be written for topic(s) {missing}; see the logs.")
     if cost is not None:
         out.append(
             f"- Model usage: {cost.calls:,} requests, {cost.input_tokens:,} input and "

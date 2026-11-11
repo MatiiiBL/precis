@@ -5,7 +5,7 @@
 <nav class="crumbs"><a href="{{ root }}index.html">Overview</a> › Topic {{ topic.id }}</nav>
 <h1>{{ topic.label }}</h1>
 <p class="lede">{{ topic.description }}</p>
-<p class="muted">{{ papers | length }} papers</p>
+<p class="muted">{{ papers | length | count("paper") }}</p>
 {{ chips(topic.keywords) }}
 
 {% if synthesis %}

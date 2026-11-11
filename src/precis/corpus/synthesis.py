@@ -17,6 +17,7 @@ is a hallucination or a cross-topic leak, and is removed and counted.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import re
 from collections import Counter
@@ -27,12 +28,15 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from precis.agents.strategies import gather_all
 from precis.config import AgentConfig
 from precis.corpus.load import FinishedPaper
 from precis.corpus.structured import request_structured, structured_params
 from precis.llm.base import ModelGateway
 from precis.models import CorpusReport, Topic, TopicSynthesis
 from precis.util import estimate_tokens
+
+log = logging.getLogger(__name__)
 
 # "[arXiv:2406.01234]"; grouped forms such as "[arXiv:2406.01234, arXiv:2407.0042]"
 # are accepted and split, since models produce them despite instructions.
@@ -242,8 +246,16 @@ class SynthesisStats(BaseModel):
     invalid_key_papers: int
 
 
+class FailedTopic(BaseModel):
+    topic_id: int
+    error: str
+
+
 class ReportStats(BaseModel):
     topics: list[SynthesisStats]
+    failed: list[FailedTopic] = Field(
+        default_factory=list, description="Topics whose synthesis failed and is missing."
+    )
     topics_digest: str = Field(
         default="", description="Digest of the topic model the report was written from."
     )
@@ -280,14 +292,12 @@ class _Synthesizer:
         chunks = deal(entries, self.budget)
         if len(chunks) == 1:
             return await self._ask(SYNTHESIS_SYSTEM, topic_prompt(topic, entries, None)), 1
-        drafts = await asyncio.gather(
-            *(
-                self._ask(
-                    SYNTHESIS_SYSTEM,
-                    topic_prompt(topic, [entries[i] for i in chunk], (n, len(chunks))),
-                )
-                for n, chunk in enumerate(chunks, start=1)
+        drafts = await gather_all(
+            self._ask(
+                SYNTHESIS_SYSTEM,
+                topic_prompt(topic, [entries[i] for i in chunk], (n, len(chunks))),
             )
+            for n, chunk in enumerate(chunks, start=1)
         )
         levels = 2
         while True:
@@ -301,7 +311,7 @@ class _Synthesizer:
                     f"{self.budget} tokens"
                 )
             merges = [merge_prompt(topic, [drafts[i] for i in g]) for g in groups]
-            drafts = await asyncio.gather(*(self._ask(MERGE_SYSTEM, m) for m in merges))
+            drafts = await gather_all(self._ask(MERGE_SYSTEM, m) for m in merges)
             levels += 1
 
 
@@ -376,7 +386,8 @@ def intro_prompt(
     lines += ["Primary categories: " + ", ".join(f"{c} ({n})" for c, n in top), "", "Topics:"]
     by_id = {s.topic_id: s for s in syntheses}
     for topic in topics:
-        lines += ["", f"{topic.id}. {topic.label} ({len(topic.paper_ids)} papers)"]
+        size = len(topic.paper_ids)
+        lines += ["", f"{topic.id}. {topic.label} ({size} paper{'' if size == 1 else 's'})"]
         lines.append(f"Description: {topic.description}")
         synthesis = by_id.get(topic.id)
         if synthesis is not None:
@@ -397,7 +408,13 @@ async def write_report(
     budget: int,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> tuple[CorpusReport, ReportStats]:
-    """Synthesize every topic (concurrently), then write the introduction."""
+    """Synthesize every topic (concurrently), then write the introduction.
+
+    A topic whose synthesis fails (a refusal, a reply that never validates,
+    retries exhausted) is left out of the report and listed in
+    ``ReportStats.failed`` instead of failing the whole report; re-running
+    retries it, and the topics that succeeded come back from the cache.
+    """
     by_id = {p.id: p for p in papers}
     results = await asyncio.gather(
         *(
@@ -409,9 +426,23 @@ async def write_report(
                 budget=budget,
             )
             for topic in topics
-        )
+        ),
+        return_exceptions=True,
     )
-    syntheses = [synthesis for synthesis, _ in results]
+    syntheses: list[TopicSynthesis] = []
+    stats: list[SynthesisStats] = []
+    failed: list[FailedTopic] = []
+    for topic, result in zip(topics, results, strict=True):
+        if isinstance(result, Exception):
+            log.warning("topic %d (%s): synthesis failed: %s", topic.id, topic.label, result)
+            failed.append(
+                FailedTopic(topic_id=topic.id, error=f"{type(result).__name__}: {result}")
+            )
+        elif isinstance(result, BaseException):
+            raise result
+        else:
+            syntheses.append(result[0])
+            stats.append(result[1])
     params: dict[str, Any] = structured_params(
         agent,
         system=INTRO_SYSTEM,
@@ -426,4 +457,4 @@ async def write_report(
         introduction=intro.introduction.strip(),
         topics=syntheses,
     )
-    return report, ReportStats(topics=[stats for _, stats in results])
+    return report, ReportStats(topics=stats, failed=failed)

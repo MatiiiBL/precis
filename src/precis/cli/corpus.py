@@ -213,6 +213,11 @@ def report_command(
         f"{len(report.topics)} topic syntheses, {stats.citations} citations kept, "
         f"{stats.invalid_citations} removed; spent ${gateway.spent_usd:.2f}."
     )
+    for failed in stats.failed:
+        console.print(
+            f"[yellow]Topic {failed.topic_id} has no synthesis:[/] {failed.error}. "
+            "Run precis report again to retry it."
+        )
 
 
 def site_command(

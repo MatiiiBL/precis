@@ -126,5 +126,8 @@ def test_report_has_contents_sections_and_linked_citations() -> None:
     assert key.index("2507.00001") < key.index("2507.00000")
     assert "*No synthesis was written for this topic.*" in text
     assert "1 removed" in text
+    assert "(2 papers)" in text
+    single = topics[0].model_copy(update={"paper_ids": ["2507.00000"]})
+    assert "(1 paper)" in render_report(report, [single], papers)
     assert "100.0% of first drafts" in text
     assert text.endswith(".\n")

@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from corpus.factories import ScriptedGateway, make_view
+from corpus.factories import ScriptedGateway, make_view, message
 from precis.config import AgentConfig
 from precis.corpus.load import FinishedPaper
 from precis.corpus.synthesis import (
@@ -139,6 +139,23 @@ async def test_drafts_too_long_to_merge_are_an_error_not_a_cut() -> None:
         await synthesize_topic(
             ScriptedGateway(_echo), _topic(papers), papers, AgentConfig(), budget=entry_tokens * 2
         )
+
+
+async def test_a_failed_topic_is_reported_not_fatal() -> None:
+    good, bad = _papers(3, "2507."), _papers(3, "2508.")
+    topics = [_topic(good, 1), _topic(bad, 2)]
+
+    def script(params: dict[str, Any], stage: str) -> Any:
+        if stage == "synthesize" and "2508." in params["messages"][0]["content"]:
+            return message("", stop_reason="refusal")
+        return _echo(params, stage)
+
+    report, stats = await write_report(
+        ScriptedGateway(script), topics, good + bad, AgentConfig(), budget=60000
+    )
+    assert [s.topic_id for s in report.topics] == [1]
+    assert [f.topic_id for f in stats.failed] == [2]
+    assert "AgentRefused" in stats.failed[0].error
 
 
 async def test_write_report_synthesizes_topics_then_the_introduction() -> None:

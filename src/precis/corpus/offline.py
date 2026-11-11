@@ -94,8 +94,8 @@ def introduce(params: dict[str, Any]) -> FakeReply | None:
         return None
     prompt = _user(params)
     papers = _field(prompt, "Papers") or "several"
-    topics = re.findall(r"^\d+\. (.+) \((\d+) papers\)$", prompt, flags=re.M)
-    listed = ", ".join(f"{name} ({n} papers)" for name, n in topics)
+    topics = re.findall(r"^\d+\. (.+) \((\d+ papers?)\)$", prompt, flags=re.M)
+    listed = ", ".join(f"{name} ({size})" for name, size in topics)
     category = _field(prompt, "Primary categories").split(" (")[0] or "research"
     return _json(
         {

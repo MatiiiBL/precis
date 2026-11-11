@@ -36,6 +36,7 @@ from jinja2 import Environment, PackageLoader, StrictUndefined, select_autoescap
 from precis.corpus.load import FinishedPaper
 from precis.corpus.markup import (
     arxiv_links,
+    count,
     inline_html,
     link_citations,
     markdown_html,
@@ -92,6 +93,7 @@ def _environment() -> Environment:
     env.filters["markdown"] = markdown_html
     env.filters["inline"] = inline_html
     env.filters["percent"] = lambda x: f"{100 * x:.0f}%"
+    env.filters["count"] = count
     env.globals["verdict_labels"] = {v.value: label for v, label in VERDICT_LABELS.items()}
     env.globals["page_name"] = page_name
     env.globals["faith_of"] = lambda paper: faithfulness([paper]).final

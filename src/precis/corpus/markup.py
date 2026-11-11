@@ -17,6 +17,11 @@ from precis.models import PaperMeta
 _MARKDOWN = MarkdownIt("commonmark", {"html": False})
 
 
+def count(n: int, noun: str) -> str:
+    """``count(1, "paper")`` -> "1 paper", ``count(2500, "paper")`` -> "2,500 papers"."""
+    return f"{n:,} {noun}{'' if n == 1 else 's'}"
+
+
 def slugify(text: str) -> str:
     """GitHub's heading anchor: lowercase, punctuation dropped, spaces to hyphens."""
     text = unicodedata.normalize("NFKC", text).strip().lower()
