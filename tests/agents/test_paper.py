@@ -83,7 +83,7 @@ def test_header_withholds_the_abstract_on_request() -> None:
     assert "We present ReuseNet" in v.header(include_abstract=True)
     withheld = v.header(include_abstract=False)
     assert "We present ReuseNet" not in withheld
-    assert "Abstract: withheld" in withheld
+    assert withheld.endswith("</paper_text>\nThe abstract is withheld; work from the body text.")
     assert "Categories: cs.AR (also cs.LG)" in withheld
 
 

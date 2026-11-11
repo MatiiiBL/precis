@@ -54,7 +54,7 @@ async def test_reviser_sees_the_failures_and_returns_revision_one() -> None:
 
     brief = gw.requests[0]["messages"][0]["content"]
     assert "[finding:0] contradicted: The paper reports 18.4%, not 41.3%." in brief
-    assert "Verifier's quote (s4.2): \"ReuseNet reduces LLC misses by 18.4%" in brief
+    assert "Verifier's quote (s4.2): <paper_text>ReuseNet reduces LLC misses by 18.4%" in brief
     assert "[finding:1] partial: Scope." in brief
     assert "[tldr]" not in brief.split("<failed_checks>")[1]
     assert "Claims that passed: tldr." in brief

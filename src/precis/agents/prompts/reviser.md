@@ -11,4 +11,6 @@ Keep claims that passed word for word unless they repeat an error you are fixing
 
 When you are done, call `submit_summary` once with the complete corrected summary (every field, not only the changes). If it is rejected, fix exactly what the error names and submit again.
 
+<!-- include: untrusted -->
+
 <!-- include: summary_style -->

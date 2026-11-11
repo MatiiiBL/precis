@@ -3,6 +3,11 @@
 Everything an agent is shown about a paper is rendered here, deterministically,
 so that the same paper always produces byte-identical prompts: the gateway's
 response cache and the API's prompt cache both key on exact request bytes.
+
+Paper text is untrusted: papers on arXiv have carried hidden instructions
+aimed at AI reviewers. Every span of it that reaches a model is wrapped by
+``paper_text`` in ``<paper_text>`` tags, which the system prompts declare to
+be material to work on and never instructions.
 """
 
 from __future__ import annotations
@@ -43,6 +48,24 @@ _NUMBER = re.compile(r"(?<![\w.])\d+(?:,\d{3})*(?:\.\d+)?")
 # Integers this small are often spelled out ("three datasets"), so they are
 # not required to appear as digits in the paper.
 _SMALL_INTEGER = 12
+
+
+PAPER_TEXT_TAG = "paper_text"
+_TAG_IN_TEXT = re.compile(r"<\s*/?\s*paper_text\s*>", re.IGNORECASE)
+
+
+def paper_text(text: str, *, inline: bool = False) -> str:
+    """Wrap text that comes from a paper in ``<paper_text>`` tags.
+
+    Tags of the same name inside the text are defused (``</paper_text>``
+    becomes ``</paper-text>``), so the paper cannot end the block early and
+    smuggle text outside it. ``inline`` keeps the tags on the same line, for
+    short spans such as a quote.
+    """
+    defused = _TAG_IN_TEXT.sub(lambda m: m.group().replace("_", "-"), text.strip())
+    if inline:
+        return f"<{PAPER_TEXT_TAG}>{defused}</{PAPER_TEXT_TAG}>"
+    return f"<{PAPER_TEXT_TAG}>\n{defused}\n</{PAPER_TEXT_TAG}>"
 
 
 def normalize_text(text: str) -> str:
@@ -165,7 +188,7 @@ class PaperView:
     # -- rendering ---------------------------------------------------------
 
     def header(self, *, include_abstract: bool) -> str:
-        """Title, authors, categories and (optionally) the abstract."""
+        """Title, authors, categories and (optionally) the abstract, as paper text."""
         meta = self.meta
         authors = ", ".join(meta.authors[:_MAX_AUTHORS])
         if len(meta.authors) > _MAX_AUTHORS:
@@ -176,9 +199,10 @@ class PaperView:
         lines.append(f"Categories: {categories}")
         if include_abstract:
             lines += ["Abstract:", meta.abstract.strip()]
-        else:
-            lines.append("Abstract: withheld; work from the body text.")
-        return "\n".join(lines)
+        text = paper_text("\n".join(lines))
+        if not include_abstract:
+            text += "\nThe abstract is withheld; work from the body text."
+        return text
 
     def outline(self) -> str:
         """One line per section with its id, title and size, indented by level."""

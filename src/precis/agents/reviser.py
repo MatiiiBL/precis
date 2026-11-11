@@ -8,7 +8,7 @@ can be wrong too, and the rewritten summary is verified again afterwards.
 from __future__ import annotations
 
 from precis.agents.loop import AgentSpec, run_agent
-from precis.agents.paper import PaperView
+from precis.agents.paper import PaperView, paper_text
 from precis.agents.prompts import load_prompt
 from precis.agents.submissions import summary_tool
 from precis.agents.tools import PassageIndex, ReadingTools, paper_index
@@ -35,7 +35,7 @@ def _render_check(check: ClaimCheck) -> str:
     lines = [f"[{check.target}] {check.verdict.value}: {check.note}"]
     if check.evidence:
         where = f" ({check.section_id})" if check.section_id else ""
-        lines.append(f'  Verifier\'s quote{where}: "{check.evidence}"')
+        lines.append(f"  Verifier's quote{where}: {paper_text(check.evidence, inline=True)}")
     return "\n".join(lines)
 
 

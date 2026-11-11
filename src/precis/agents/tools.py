@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from precis.agents.paper import PaperView
+from precis.agents.paper import PaperView, paper_text
 from precis.models import Document
 from precis.text.bm25 import PaperIndex
 from precis.util import estimate_tokens
@@ -156,7 +156,7 @@ class ReadingTools:
         section_id = section_id.strip()
         if section_id in view.captions:
             caption = view.captions[section_id]
-            return ToolOutput(f"[{caption.id}] ({caption.kind})\n\n{caption.text.strip()}")
+            return ToolOutput(f"[{caption.id}] ({caption.kind})\n{paper_text(caption.text)}")
         if section_id not in view.sections:
             return ToolOutput(self._unknown_id(section_id), is_error=True)
         section = view.sections[section_id]
@@ -183,7 +183,8 @@ class ReadingTools:
         text = pages[page - 1]
         self.log.tokens_read += estimate_tokens(text)
         heading = f"[{section_id}] {section.title} (page {page} of {len(pages)})"
-        return ToolOutput(f"{heading}\n\n{text}\n\n{self._after(section_id, page, len(pages))}")
+        after = self._after(section_id, page, len(pages))
+        return ToolOutput(f"{heading}\n{paper_text(text)}\n{after}")
 
     def _after(self, section_id: str, page: int, n_pages: int) -> str:
         if page < n_pages:
@@ -221,7 +222,7 @@ class ReadingTools:
         for rank, hit in enumerate(hits, 1):
             section = self.view.sections.get(hit.section_id)
             title = f" {section.title}" if section else ""
-            blocks.append(f"{rank}. [{hit.section_id}]{title}\n{hit.text.strip()}")
+            blocks.append(f"{rank}. [{hit.section_id}]{title}\n{paper_text(hit.text)}")
         blocks.append("read_section shows a passage in its context.")
         return ToolOutput("\n\n".join(blocks))
 
@@ -238,7 +239,9 @@ class ReadingTools:
         lines = []
         for caption in captions:
             text = " ".join(caption.text.split())
+            note = ""
             if limit is not None and estimate_tokens(text) > limit:
-                text = text[: limit * 4].rstrip() + " [shortened]"
-            lines.append(f"[{caption.id}] ({caption.kind}) {text}")
+                text = text[: limit * 4].rstrip()
+                note = " (shortened; read_section with its id returns it in full)"
+            lines.append(f"[{caption.id}] ({caption.kind}){note}\n{paper_text(text)}")
         return ToolOutput("\n\n".join(lines))

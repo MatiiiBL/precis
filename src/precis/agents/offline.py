@@ -48,7 +48,10 @@ _CHECK_LINE = re.compile(r"^\[(tldr|finding:\d+)\] (\w+):", re.MULTILINE)
 _BLOCK_START = re.compile(rf"\n\n(?=\[{_ID}\] )")
 _HEADED_BLOCK = re.compile(rf"^\[({_ID})\] (.*?)(?:\n\n|$)(.*)", re.DOTALL)
 _NOTE_LINE = re.compile(rf"^\[({_ID})\] (.+)$", re.MULTILINE)
-_SEARCH_HIT = re.compile(rf"^\d+\. \[({_ID})\][^\n]*\n(.+)", re.DOTALL)
+_READ_RESULT = re.compile(rf"^\[({_ID})\] (.*?)\n<paper_text>\n(.*?)\n</paper_text>", re.DOTALL)
+_SEARCH_HIT = re.compile(
+    rf"^\d+\. \[({_ID})\][^\n]*\n<paper_text>\n(.*?)\n</paper_text>", re.DOTALL | re.MULTILINE
+)
 _WORD = re.compile(r"[a-z0-9]+(?:\.\d+)?")
 _RAW_NUMBER = re.compile(r"(?<![\w.])\d+(?:,\d{3})*(?:\.\d+)?")
 
@@ -151,26 +154,21 @@ def _read_passages(exchanges: Iterable[_Exchange]) -> list[_Passage]:
         if ex.is_error:
             continue
         if ex.name == "read_section":
-            match = _HEADED_BLOCK.match(ex.output)
-            if not match:
-                continue
-            paragraphs = match.group(3).split("\n\n")
-            if paragraphs and re.match(r"(Continues on page|End of section)", paragraphs[-1]):
-                paragraphs = paragraphs[:-1]
-            title = re.sub(r" \(page \d+ of \d+\)$", "", match.group(2))
-            passages.append(_Passage(match.group(1), title, "\n\n".join(paragraphs)))
+            match = _READ_RESULT.match(ex.output)
+            if match:
+                title = re.sub(r" \(page \d+ of \d+\)$", "", match.group(2))
+                passages.append(_Passage(match.group(1), title, match.group(3)))
         elif ex.name == "search_paper":
-            for block in ex.output.split("\n\n")[1:]:
-                hit = _SEARCH_HIT.match(block)
-                if hit:
-                    passages.append(_Passage(hit.group(1), "", hit.group(2)))
+            passages += [
+                _Passage(h.group(1), "", h.group(2)) for h in _SEARCH_HIT.finditer(ex.output)
+            ]
     return passages
 
 
 def _blocks(text: str) -> list[_Passage]:
     """Split ``[id] Title\\n\\ntext`` blocks (the fulltext body and mapreduce parts)."""
     passages = []
-    for block in _BLOCK_START.split(text.strip()):
+    for block in _BLOCK_START.split(_tagged(text, "paper_text").strip()):
         match = _HEADED_BLOCK.match(block)
         if match:
             passages.append(_Passage(match.group(1), match.group(2), match.group(3)))

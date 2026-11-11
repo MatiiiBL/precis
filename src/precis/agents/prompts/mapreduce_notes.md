@@ -9,3 +9,5 @@ Write a list of notes covering, where this part has them:
 - limitations, assumptions and threats to validity the authors state.
 
 Start each note with the id of the section it comes from, in brackets, for example "[s4.2]". Copy numbers exactly; never round, convert or compute them. Record what the text says without judging it and without promotional language. If this part has nothing of substance (for example, only acknowledgements), say so in one line.
+
+<!-- include: untrusted -->

@@ -12,4 +12,6 @@ Read with a purpose. Most papers need the introduction (problem and contribution
 
 When you are done, call `submit_summary` once with the complete summary. If it is rejected, read the error, fix exactly what it names, and submit again.
 
+<!-- include: untrusted -->
+
 <!-- include: summary_style -->

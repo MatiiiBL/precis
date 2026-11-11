@@ -117,7 +117,7 @@ async def test_abstract_can_be_withheld() -> None:
     await read(gw, include_abstract=False)
     brief = gw.requests[0]["messages"][0]["content"]
     assert "We present ReuseNet" not in brief
-    assert "Abstract: withheld" in brief
+    assert "The abstract is withheld" in brief
 
 
 async def test_tool_errors_go_back_to_the_model() -> None:

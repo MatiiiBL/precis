@@ -18,9 +18,10 @@ def tools() -> ReadingTools:
 def test_read_section_pages_through_a_section(tools: ReadingTools) -> None:
     first = tools.run("read_section", {"section_id": "s3", "page": 1})
     assert not first.is_error
-    assert first.text.startswith("[s3] Design of ReuseNet (page 1 of 2)\n\n")
-    assert DESIGN_1 in first.text
-    assert first.text.endswith("Continues on page 2 of 2.")
+    assert first.text == (
+        f"[s3] Design of ReuseNet (page 1 of 2)\n<paper_text>\n{DESIGN_1}\n</paper_text>\n"
+        "Continues on page 2 of 2."
+    )
     second = tools.run("read_section", {"section_id": "s3", "page": 2})
     assert DESIGN_2 in second.text
     assert second.text.endswith("End of section s3. Next in the outline: s4 Evaluation.")
@@ -60,14 +61,16 @@ def test_heading_only_sections_point_to_their_subsections(tools: ReadingTools) -
 
 def test_caption_ids_return_the_full_caption(tools: ReadingTools) -> None:
     out = tools.run("read_section", {"section_id": " tab1 ", "page": 1})
-    assert out.text == "[tab1] (table)\n\nStorage: ReuseNet 12.5 KB; Hawkeye 28 KB."
+    assert out.text == (
+        "[tab1] (table)\n<paper_text>\nStorage: ReuseNet 12.5 KB; Hawkeye 28 KB.\n</paper_text>"
+    )
 
 
 def test_search(tools: ReadingTools) -> None:
     out = tools.run("search_paper", {"query": "IPC over Hawkeye"})
     assert out.text.startswith("2 passages for 'IPC over Hawkeye', best first:")
     # A short section is a single BM25 passage.
-    assert f"1. [s4.2] Results\n{RESULTS}" in out.text
+    assert f"1. [s4.2] Results\n<paper_text>\n{RESULTS}\n</paper_text>" in out.text
     assert out.text.endswith("read_section shows a passage in its context.")
     assert tools.run("search_paper", {"query": "  "}).is_error
     empty = tools.run("search_paper", {"query": "quantum"})
@@ -83,9 +86,9 @@ def test_captions_are_listed_and_shortened_when_long() -> None:
         PaperView(make_meta(), doc, page_tokens=1000), paper_index(doc), search_results=2
     )
     out = tools.run("read_captions", {})
-    assert out.text.startswith("[fig1] (figure) Miss reduction over LRU")
-    assert "[tab1] (table) Storage: ReuseNet 12.5 KB; Hawkeye 28 KB." in out.text
-    assert out.text.endswith("[shortened]")
+    assert out.text.startswith("[fig1] (figure)\n<paper_text>\nMiss reduction over LRU")
+    assert "[tab1] (table)\n<paper_text>\nStorage: ReuseNet 12.5 KB; Hawkeye 28 KB." in out.text
+    assert "[tab2] (table) (shortened; read_section with its id returns it in full)" in out.text
     assert len(out.text) < 2000
     none = ReadingTools(
         PaperView(make_meta(), doc.model_copy(update={"captions": []}), page_tokens=40),

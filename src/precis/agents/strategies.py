@@ -17,7 +17,7 @@ from typing import Any
 
 from precis.agents.errors import AgentError
 from precis.agents.messages import assistant_turn, base_params, reply_text, send
-from precis.agents.paper import PaperView
+from precis.agents.paper import PaperView, paper_text
 from precis.agents.prompts import Prompt, load_prompt
 from precis.agents.reader import run_reader
 from precis.agents.submissions import SUMMARY_SCHEMA, SubmissionRejected, parse_summary
@@ -73,7 +73,7 @@ async def structured_summary(
 def fulltext_message(view: PaperView, *, include_abstract: bool) -> str:
     return (
         f"<paper>\n{view.header(include_abstract=include_abstract)}\n</paper>\n\n"
-        f"<body>\n{view.body()}\n</body>\n\n"
+        f"<body>\n{paper_text(view.body())}\n</body>\n\n"
         "Write the summary of this paper as JSON."
     )
 
@@ -122,18 +122,19 @@ def chunk_body(view: PaperView, chunk_tokens: int) -> list[list[str]]:
 
 
 def notes_message(view: PaperView, chunk: list[str], number: int, total: int) -> str:
-    text = "\n\n".join(chunk)
     return (
-        f"Paper: {view.meta.title}\n"
+        f"Paper: {paper_text(view.meta.title, inline=True)}\n"
         f"This is part {number} of {total} of the body.\n\n"
-        f"<part>\n{text}\n</part>\n\n"
+        f"<part>\n{paper_text('\n\n'.join(chunk))}\n</part>\n\n"
         "Write your notes on this part."
     )
 
 
 def combine_message(view: PaperView, notes: list[str], *, include_abstract: bool) -> str:
+    """The notes are model text, but they carry the paper's words, so they are paper text too."""
     parts = "\n\n".join(
-        f"## Notes on part {i} of {len(notes)}\n\n{text.strip()}" for i, text in enumerate(notes, 1)
+        f"## Notes on part {i} of {len(notes)}\n{paper_text(text)}"
+        for i, text in enumerate(notes, 1)
     )
     return (
         f"<paper>\n{view.header(include_abstract=include_abstract)}\n</paper>\n\n"

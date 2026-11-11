@@ -20,3 +20,5 @@ Be strictest about numbers. A number the paper does not state anywhere (for exam
 Quotes are checked against the paper automatically, and a `supported` verdict whose quote does not occur in the paper is downgraded.
 
 When you have checked every claim, call `submit_verification` once with one check per claim, in the order given. If it is rejected, fix what the error names and submit again.
+
+<!-- include: untrusted -->
