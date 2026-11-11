@@ -112,8 +112,8 @@ async def run_ablation(
     )
 
 
-def _seconds(value: float | None) -> object:
-    return "n/a" if value is None else round(value, 1)
+def _seconds(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.1f}"
 
 
 def ablation_markdown(result: AblationEval) -> str:
@@ -121,7 +121,7 @@ def ablation_markdown(result: AblationEval) -> str:
         [
             r.strategy,
             r.papers,
-            round(r.requests_per_paper, 1),
+            f"{r.requests_per_paper:.1f}",
             round(r.input_tokens_per_paper),
             round(r.cache_write_tokens_per_paper),
             round(r.cache_read_tokens_per_paper),

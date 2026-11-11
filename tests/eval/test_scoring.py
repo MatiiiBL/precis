@@ -115,6 +115,11 @@ def test_markdown_table_formats_and_aligns() -> None:
     ]
 
 
+def test_formatted_numbers_align_as_numbers() -> None:
+    table = markdown_table(["Cost", "Share", "Name"], [["$0.039", "16%", "a"], ["n/a", "7%", "b"]])
+    assert table.splitlines()[1] == "| ---: | ---: | --- |"
+
+
 def test_write_results(tmp_path: Path) -> None:
     class Result(BaseModel):
         value: int

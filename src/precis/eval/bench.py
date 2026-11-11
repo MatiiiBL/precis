@@ -267,17 +267,17 @@ def throughput_markdown(result: ThroughputResult) -> str:
     rows = [
         [
             p.concurrency,
-            round(p.papers_per_minute, 1),
+            f"{p.papers_per_minute:.1f}",
             round(p.requests_per_minute),
             f"{100 * p.requests_per_minute / result.rpm_limit:.0f}%",
             f"{100 * p.input_tokens_per_minute / result.itpm_limit:.0f}%",
             f"{100 * p.output_tokens_per_minute / result.otpm_limit:.0f}%",
             f"{100 * p.rate_limited_share:.2f}%",
             p.final_concurrency_limit,
-            round(p.paper_latency_p50_s / 60, 1),
-            round(p.paper_latency_p95_s / 60, 1),
-            round(p.simulated_minutes, 1),
-            round(p.wall_seconds, 1),
+            f"{p.paper_latency_p50_s / 60:.1f}",
+            f"{p.paper_latency_p95_s / 60:.1f}",
+            f"{p.simulated_minutes:.1f}",
+            f"{p.wall_seconds:.0f}",
         ]
         for p in result.points
     ]
@@ -324,14 +324,19 @@ def throughput_figure(result: ThroughputResult, path: Path) -> Path:
         Series("p50", [p.paper_latency_p50_s / 60 for p in result.points]),
         Series("p95", [p.paper_latency_p95_s / 60 for p in result.points]),
     ]
-    limited = Series("429s", [100 * p.rate_limited_share for p in result.points])
+    window = [
+        Series("ceiling", [float(p.concurrency) for p in result.points]),
+        Series("adaptive window", [float(p.final_concurrency_limit) for p in result.points]),
+    ]
     panels = [
         Panel("Papers per minute", "papers/min", [papers]),
         Panel("Achieved rate, share of limit", "% of limit", share, 100, "limit"),
         Panel("Paper latency", "minutes", latency),
-        Panel("Rate-limited responses", "% of responses", [limited]),
+        Panel("Concurrency at the end of the run", "requests in flight", window),
     ]
-    title = f"Throughput: {result.papers:,} papers through read, verify and revise (offline)"
+    limited = sum(p.rate_limited for p in result.points)
+    errors = "no 429s" if limited == 0 else f"{limited:,} 429s"
+    title = f"Throughput: {result.papers:,} papers, read, verify and revise (offline; {errors})"
     return small_multiples(x, panels, path, title=title)
 
 

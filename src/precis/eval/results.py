@@ -2,17 +2,30 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic import BaseModel
 
+# Pre-formatted numbers ("$0.039", "16%", "1,200", "n/a") align like numbers.
+_NUMBER_TEXT = re.compile(r"^(?:[$-]?[\d,]+(?:\.\d+)?%?|n/a)$")
+
 
 def markdown_table(headers: Sequence[str], rows: Sequence[Sequence[object]]) -> str:
-    """A GitHub Markdown table; columns whose cells are all numbers align right."""
+    """A GitHub Markdown table; columns whose cells are all numbers align right.
+
+    Floats get three decimals below 10 and one above; callers that want a
+    fixed precision pass formatted strings, which still align as numbers.
+    """
+
+    def is_number(value: object) -> bool:
+        if isinstance(value, int | float):
+            return True
+        return isinstance(value, str) and bool(_NUMBER_TEXT.match(value))
 
     def numeric(column: int) -> bool:
-        return all(isinstance(row[column], int | float) for row in rows) and bool(rows)
+        return bool(rows) and all(is_number(row[column]) for row in rows)
 
     def cell(value: object) -> str:
         if isinstance(value, float):
