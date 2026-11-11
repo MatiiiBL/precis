@@ -1,12 +1,13 @@
 import gzip
 from collections.abc import Sequence
+from datetime import date
 
 import pytest
 
 from precis.models import Document
 from precis.text.document import ParseError
 from precis.text.html import parse_html
-from precis.text.pdf import parse_pdf, pdf_front_matter
+from precis.text.pdf import parse_pdf, read_pdf
 from precis.text.quality import check_document
 
 from .helpers import FIXTURES, PdfLine, make_pdf
@@ -289,16 +290,21 @@ def test_unusable_files_raise_parse_errors() -> None:
         parse_pdf(make_pdf([[]]), "x")
 
 
-def test_front_matter_title_and_abstract() -> None:
-    data = make_pdf(paginate(ACM_PAPER), info={"Title": "Learned Cache Replacement for Servers"})
-    front = pdf_front_matter(data)
-    assert front.title == "Learned Cache Replacement for Servers"
-    assert front.abstract.startswith("ABSTRACTMARK we study replacement policies")
+def test_front_matter_title_abstract_and_date() -> None:
+    info = {"Title": "Learned Cache Replacement", "CreationDate": "D:20250704120000Z"}
+    doc, front = read_pdf(make_pdf(paginate(ACM_PAPER), info=info), "x")
+    assert doc.sections[0].title == "INTRODUCTION"
+    assert front.title == "Learned Cache Replacement"
+    assert front.abstract == (
+        "ABSTRACTMARK we study replacement policies for very large shared caches."
+    )
+    assert front.created == date(2025, 7, 4)
+    assert front.license is None
     # Without usable metadata the largest text on the first page is the title.
-    for info in (None, {"Title": "paper.dvi"}):
-        assert pdf_front_matter(make_pdf(paginate(ACM_PAPER), info=info)).title == (
-            "Learned Cache Replacement for Servers"
-        )
+    for bad in (None, {"Title": "paper.dvi"}, {"CreationDate": "garbage"}):
+        _, front = read_pdf(make_pdf(paginate(ACM_PAPER), info=bad), "x")
+        assert front.title == "Learned Cache Replacement for Servers"
+        assert front.created is None
 
 
 def test_real_ieee_paper_matches_its_html_outline() -> None:
@@ -324,7 +330,7 @@ def test_real_preprint_with_lettered_appendix_after_author_year_references() -> 
     text = text_of(doc)
     assert "Zefan Cai, Yichi Zhang" not in text  # the first reference
     assert "Cross-context KV-cache reuse predicts" not in text  # the abstract
-    front = pdf_front_matter((FIXTURES / "2610.02233v2-p1-13.pdf").read_bytes())
+    _, front = read_pdf((FIXTURES / "2610.02233v2-p1-13.pdf").read_bytes(), "x")
     assert front.title == "Budgeted Cache Repair for Cross-Context KV-Cache Reuse"
     assert front.license == "http://creativecommons.org/licenses/by/4.0/"
     assert front.abstract.startswith("Cross-context KV-cache reuse predicts")

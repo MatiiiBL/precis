@@ -34,6 +34,7 @@ import statistics
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from datetime import date
 from typing import Any, Literal
 
 from pypdf import PdfReader
@@ -134,6 +135,7 @@ class PdfFrontMatter:
     title: str | None
     abstract: str
     license: str | None
+    created: date | None
 
 
 @dataclass
@@ -185,37 +187,46 @@ class _Lines:
 
 def parse_pdf(data: bytes, paper_id: str) -> Document:
     """Parse a PDF into a ``Document``; raises ``ParseError``."""
+    document, _ = _parse(_open(data), data, paper_id)
+    return document
+
+
+def read_pdf(data: bytes, paper_id: str) -> tuple[Document, PdfFrontMatter]:
+    """``parse_pdf`` plus what the PDF says about itself, for papers without arXiv
+    metadata (``precis.sources.local``).
+
+    The title comes from the document information when it looks like a real
+    title (not "Microsoft Word - draft.docx"), otherwise from the largest
+    text on the first page, which is where a paper prints its title.
+    """
     reader = _open(data)
+    document, front_lines = _parse(reader, data, paper_id)
+    metadata: dict[str, Any] = dict(reader.metadata or {})
+    title = _metadata_title(metadata.get("/Title"))
+    if title is None and reader.pages:
+        title = _largest_text(reader.pages[0])
+    license_url = metadata.get("/License")
+    front = PdfFrontMatter(
+        title=title,
+        abstract=_abstract(front_lines),
+        license=str(license_url) if license_url else None,
+        created=_creation_date(reader),
+    )
+    return document, front
+
+
+def _parse(reader: PdfReader, data: bytes, paper_id: str) -> tuple[Document, list[str]]:
+    """The document, and the front-matter lines that were cut from it."""
     lines = _clean_lines(_page_lines(reader))
     if not lines:
         raise ParseError("the PDF has no extractable text (scanned images?)")
     doc_lines = _Lines(lines, _median_len(lines), _vocabulary(lines))
     body, tail = _split_references(lines)
-    drafts, captions = _structure(body, tail, doc_lines)
-    return build_document(paper_id, "pdf", drafts, captions, sha256_hex(data))
-
-
-def pdf_front_matter(data: bytes) -> PdfFrontMatter:
-    """Title, abstract and license of a PDF, for local papers (``precis.sources.local``).
-
-    The title comes from the document metadata when it looks like a real
-    title, otherwise from the largest text on the first page.
-    """
-    reader = _open(data)
-    metadata: dict[str, Any] = dict(reader.metadata or {})
-    title = _metadata_title(metadata.get("/Title"))
-    if title is None and reader.pages:
-        title = _largest_text(reader.pages[0])
-    lines = _clean_lines(_page_lines(reader))
-    body, _ = _split_references(lines)
-    headings = _find_headings(body, _Lines(body, _median_len(body)))
-    first = headings[0].index if headings else len(body)
-    license_url = metadata.get("/License")
-    return PdfFrontMatter(
-        title=title,
-        abstract=_abstract(body[:first]),
-        license=str(license_url) if license_url else None,
-    )
+    headings = _find_headings(body, doc_lines)
+    front_end = headings[0].index if headings else len(body) - len(_after_abstract(body))
+    front = body[:front_end]
+    drafts, captions = _structure(body, tail, headings, doc_lines)
+    return build_document(paper_id, "pdf", drafts, captions, sha256_hex(data)), front
 
 
 # -- reading -------------------------------------------------------------------
@@ -307,6 +318,14 @@ def _vocabulary(lines: list[str]) -> set[str]:
     return set(re.findall(r"[a-z]+(?:-[a-z]+)*", text))
 
 
+def _creation_date(reader: PdfReader) -> date | None:
+    try:
+        created = reader.metadata.creation_date if reader.metadata else None
+    except (ValueError, TypeError):  # malformed "D:..." strings are common
+        return None
+    return created.date() if created else None
+
+
 def _metadata_title(value: object) -> str | None:
     if not isinstance(value, str):
         return None
@@ -355,9 +374,8 @@ def _split_references(lines: list[str]) -> tuple[list[str], list[str]]:
 
 
 def _structure(
-    body: list[str], tail: list[str], doc: _Lines
+    body: list[str], tail: list[str], headings: list[_Heading], doc: _Lines
 ) -> tuple[list[SectionDraft], list[Caption]]:
-    headings = _find_headings(body, doc)
     appendix_lines: list[str] = []
     if headings:
         last_top = max(h.index for h in headings if h.level == 1)
