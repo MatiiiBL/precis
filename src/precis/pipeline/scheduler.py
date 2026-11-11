@@ -118,7 +118,8 @@ class Pipeline:
             raise ValueError("no stages to run; choose from read, verify and revise")
         self.stats = RunStats(papers=len(paper_ids), stages=wanted)
         self._stopping = False
-        repaired = self.store.reset_running()
+        # Only this command's stages: a concurrent `precis fetch` owns the fetch rows.
+        repaired = self.store.reset_running(stages=PIPELINE_STAGES)
         if repaired:
             log.warning("reset %d stages left running by an earlier crash", repaired)
         self.store.start_run(
@@ -252,12 +253,17 @@ class Pipeline:
     async def _execute(
         self, paper: _Paper, stage: Stage, config_hash: str, previous: StageRecord | None
     ) -> None:
-        attempts = (previous.attempts if previous else 0) + 1
+        attempts = _attempt(previous, config_hash)
+        # Requests are deterministic, so a retry with the plain cache would
+        # replay the replies that made the stage fail. Each retry gets its own
+        # cache scope; a crash inside it still resumes from that scope.
+        salt = f"attempt-{attempts}" if attempts > 1 else ""
         tally = self.stats.tally[stage]
         self._record(paper.id, stage, StageStatus.RUNNING, config_hash, attempts)
         tally.running += 1
         try:
-            output = await self._compute(paper, stage)
+            with self.gateway.cache_scope(salt):
+                output = await self._compute(paper, stage)
         except asyncio.CancelledError:
             self._record(paper.id, stage, StageStatus.PENDING, config_hash, attempts, "interrupted")
             tally.interrupted += 1
@@ -369,6 +375,20 @@ class Pipeline:
                         }
                     )
                 )
+
+
+def _attempt(previous: StageRecord | None, config_hash: str) -> int:
+    """Which attempt at the stage's current inputs this execution is.
+
+    New inputs start at 1. A stage that failed or was refused is retried as
+    the next attempt; one left pending by an interrupt, the budget or a crash
+    resumes the attempt it was in.
+    """
+    if previous is None or previous.config_hash != config_hash:
+        return 1
+    if previous.status in (StageStatus.FAILED, StageStatus.REFUSED):
+        return previous.attempts + 1
+    return max(previous.attempts, 1)
 
 
 def _gateway_summary(gateway: Gateway) -> dict[str, Any]:

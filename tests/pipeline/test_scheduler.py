@@ -9,7 +9,9 @@ import pytest
 
 from precis.corpus.load import load_papers
 from precis.llm.fake import FakeReply
+from precis.llm.gateway import request_hash_of
 from precis.models import RevisionResult, Stage, StageRecord, StageStatus
+from precis.pipeline import hashing
 
 from .helpers import add_papers, brief_title, config, setup
 
@@ -214,25 +216,74 @@ async def test_sigint_cancels_in_flight_work_and_leaves_it_pending() -> None:
     assert stats["stages"]["read"]["cached"] >= 1
 
 
+def running(
+    paper_id: str, stage: Stage, config_hash: str = "old", attempts: int = 1
+) -> StageRecord:
+    return StageRecord(
+        paper_id=paper_id,
+        stage=stage,
+        status=StageStatus.RUNNING,
+        attempts=attempts,
+        config_hash=config_hash,
+        run_id="crashed",
+        updated_at=datetime.now(UTC),
+    )
+
+
 async def test_running_stages_from_a_crash_are_reset_and_rerun() -> None:
     s = setup()
+    ids = add_papers(s.store, 2)
+    s.store.set_stage(running(ids[0], Stage.READ))
+    # A `precis fetch` running at the same time owns its fetch rows.
+    s.store.set_stage(running(ids[1], Stage.FETCH))
+    await s.pipeline("run-1").run(ids[:1], ALL)
+    record = s.store.get_stage(ids[0], Stage.READ)
+    assert record is not None
+    assert record.status is StageStatus.DONE
+    assert record.attempts == 1  # new inputs (the hash changed): a first attempt
+    assert status(s, ids[1], Stage.FETCH) is StageStatus.RUNNING
+
+
+async def test_a_failed_stage_is_retried_with_fresh_responses() -> None:
+    misbehave = [True]
+
+    def stop_without_submitting(params: dict[str, Any]) -> FakeReply | None:
+        reader = "You are the reader" in params["system"][0]["text"]
+        if misbehave[0] and reader and "Design0" in brief_title(params):
+            return FakeReply.text("Done reading.")
+        return None
+
+    s = setup(stop_without_submitting)
     ids = add_papers(s.store, 1)
-    s.store.set_stage(
-        StageRecord(
-            paper_id=ids[0],
-            stage=Stage.READ,
-            status=StageStatus.RUNNING,
-            attempts=1,
-            config_hash="old",
-            run_id="crashed",
-            updated_at=datetime.now(UTC),
-        )
-    )
     await s.pipeline("run-1").run(ids, ALL)
+    assert status(s, ids[0], Stage.READ) is StageStatus.FAILED
+
+    misbehave[0] = False
+    await s.pipeline("run-2").run(ids, ALL)
     record = s.store.get_stage(ids[0], Stage.READ)
     assert record is not None
     assert record.status is StageStatus.DONE
     assert record.attempts == 2
+    # Without a fresh cache scope the retry would replay the failing replies.
+    read_calls = [c for c in s.store.calls(run_id="run-2") if c.stage == "read"]
+    assert read_calls
+    assert {c.status for c in read_calls} == {"ok"}
+
+
+async def test_an_interrupted_retry_resumes_in_its_own_cache_scope() -> None:
+    s = setup()
+    ids = add_papers(s.store, 1)
+    meta, doc = s.store.get_paper(ids[0]), s.store.get_document(ids[0])
+    assert meta is not None
+    assert doc is not None
+    read_hash = hashing.read_hash(s.config.agents, meta, doc)
+    s.store.set_stage(running(ids[0], Stage.READ, read_hash, attempts=2))
+    await s.pipeline("run-1").run(ids, [Stage.READ])
+    record = s.store.get_stage(ids[0], Stage.READ)
+    assert record is not None
+    assert record.attempts == 2
+    first = s.store.calls(run_id="run-1")[0]
+    assert first.request_hash == request_hash_of(s.fake.requests[0], "attempt-2")
 
 
 async def test_a_new_summary_marks_later_stages_pending() -> None:
