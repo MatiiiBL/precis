@@ -126,7 +126,7 @@ accounting, batching) and because it enforces things the runner does not.
   every paper of the role) and the request sets top-level automatic caching,
   which moves a breakpoint to the end of the conversation each turn, so each
   turn reads the previous one from the cache. Offline, cache reads made up
-  50% of the reader's tokens and 41% of the critic's.
+  50% of the reader's tokens and 37% of the critic's.
 - **Budgets.** When two turns remain of `max_turns`, or 80% of
   `token_budget` is spent (input, cache and output tokens summed over the
   run), one mid-conversation `system` message tells the model to stop
@@ -273,7 +273,7 @@ same statistics.
 
 Setup: 200 papers from `precis.eval.synthetic` (median body 8,540 tokens),
 all three stages, `FakeAnthropic` usage and prompt-cache model at
-`claude-opus-5-5` prices, online mode, a keyword stand-in for the BM25 index.
+`claude-opus-5-5` prices, online mode, the BM25 index from `precis.text`.
 
 | Strategy, read stage | requests / paper | tokens / paper, median | p90 | share of body read | read cost (200 papers) |
 |---|---|---|---|---|---|
@@ -307,10 +307,10 @@ The rest of the agentic run:
 
 | Stage | requests / paper | tokens / paper, median | share of body read | cost (200 papers) |
 |---|---|---|---|---|
-| verify (critic) | 2 | 7,662 | 38% | $5.71 |
-| revise (reviser + critic, 37 papers) | 4 | 15,670 | 30% | $1.92 |
+| verify (critic) | 2 | 8,420 | 38% | $6.47 |
+| revise (reviser + critic, 37 papers) | 4 | 16,458 | 30% | $2.06 |
 
-The whole agentic pipeline came to about 21,700 tokens and $0.075 per
+The whole agentic pipeline came to about 22,600 tokens and $0.079 per
 paper. 37 papers (18.5%) needed revision, all of them papers on which the
 offline reader swapped two numbers (the other 8 papers of that quarter had no
 finding with two numbers to swap); supported claims rose from 96.3% of first
@@ -318,9 +318,9 @@ drafts to 100% of revised ones. No budget notice, nudge or `max_tokens`
 retry was needed offline; the scripted tests cover those paths.
 
 **Batch mode and cache lifetime.** On the same corpus with simulated
-batch latency (300 s per batch, `ScaledClock`): online $16.22, batch with
-5-minute cache entries $8.53 (53%), batch with 1-hour entries $10.69, online
-with 1-hour entries $21.35. An agent's consecutive turns are minutes apart
+batch latency (300 s per batch, `ScaledClock`): online $17.33, batch with
+5-minute cache entries $8.93 (52%), batch with 1-hour entries $11.40, online
+with 1-hour entries $22.80. An agent's consecutive turns are minutes apart
 in batch mode, so one would expect 1-hour entries to pay off, but their writes
 cost 2x instead of 1.25x and most reads (the shared system prompt across
 papers in a batch) still land within five minutes. `agents.cache_ttl`
