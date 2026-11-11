@@ -63,6 +63,7 @@ class FetchStats:
     failures: dict[str, str] = field(default_factory=dict)
     fallbacks: dict[str, str] = field(default_factory=dict)
     tokens: list[int] = field(default_factory=list)
+    found: int = 0  # papers the search, id lookup or directory listing returned
     requests: int = 0  # HTTP requests made, retries included
 
     def add(self, outcome: Outcome) -> None:
@@ -80,6 +81,7 @@ class FetchStats:
             "failures": self.failures,
             "fallbacks": self.fallbacks,
             "tokens": sorted(self.tokens),
+            "found": self.found,
             "requests": self.requests,
         }
 

@@ -13,6 +13,7 @@ import asyncio
 import secrets
 import statistics
 from collections.abc import Awaitable, Callable, Coroutine
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -162,7 +163,9 @@ def fetch_local(
         store.start_run(run_id, {"command": "fetch local", "directory": str(directory)})
         task = progress.add_task("Parsing PDFs", total=len(paths), status="")
         runner = _runner(store, config, run_id, progress, task)
-        _finish(store, run_id, runner, lambda: runner.fetch_local(paths))
+        runner.stats.found = len(paths)
+        ending = _execute(store, run_id, runner, lambda: runner.fetch_local(paths))
+    _report(runner.stats, ending)
 
 
 def _run_arxiv(
@@ -179,54 +182,69 @@ def _run_arxiv(
         searching = progress.add_task("Finding papers", total=None, status="")
         fetching = progress.add_task("Fetching text", total=0, status="", visible=False)
         runner = _runner(store, config, run_id, progress, fetching)
-        n_found = 0
 
         def found(meta: PaperMeta) -> None:
-            nonlocal n_found
             runner.save_metadata(meta)
             if metadata_only:
                 runner.mark_pending(meta.id)
-            n_found += 1
-            progress.update(searching, completed=n_found, status=f"{n_found} papers")
+            runner.stats.found += 1
+            n = runner.stats.found
+            progress.update(searching, completed=n, status=f"{n} papers")
 
         async def work() -> None:
             async with open_http(config.fetch) as http:
                 try:
                     papers = await find(http, found)
+                    progress.update(searching, total=len(papers), completed=len(papers))
+                    if metadata_only:
+                        return
+                    progress.update(fetching, total=len(papers), visible=True)
+                    raw = RawStore(config.fetch.raw_dir)
+                    fetcher = FullTextFetcher(http, raw, config.fetch.prefer)
+                    await runner.fetch_arxiv(fetcher, papers)
                 except (ArxivApiError, FetchError, ValueError) as exc:
                     raise _Aborted(f"looking up papers failed: {exc}") from exc
-                progress.update(searching, total=len(papers), completed=len(papers))
-                if metadata_only:
-                    return
-                progress.update(fetching, total=len(papers), visible=True)
-                fetcher = FullTextFetcher(http, RawStore(config.fetch.raw_dir), config.fetch.prefer)
-                await runner.fetch_arxiv(fetcher, papers)
-                runner.stats.requests = http.requests
+                finally:
+                    runner.stats.requests = http.requests
 
-        _finish(store, run_id, runner, work)
+        ending = _execute(store, run_id, runner, work)
+    _report(runner.stats, ending)
 
 
 class _Aborted(Exception):
     """The command cannot go on (the search itself failed)."""
 
 
-def _finish(
+@dataclass(frozen=True)
+class _Ending:
+    exit_code: int = 0
+    message: str | None = None
+
+
+def _execute(
     store: Store, run_id: str, runner: FetchRunner, work: Callable[[], Coroutine[Any, Any, None]]
-) -> None:
-    """Run ``work``, then record and print the outcome; Ctrl-C keeps what is done."""
+) -> _Ending:
+    """Run ``work`` and record the run's outcome; Ctrl-C keeps what is done."""
     try:
         asyncio.run(work())
     except KeyboardInterrupt:
         store.finish_run(run_id, {**runner.stats.as_dict(), "interrupted": True})
-        _summary(runner.stats)
-        console.print("[yellow]Interrupted.[/] Run the same command again to resume.")
-        raise typer.Exit(130) from None
+        return _Ending(130, "[yellow]Interrupted.[/] Run the same command again to resume.")
     except _Aborted as exc:
         store.finish_run(run_id, {**runner.stats.as_dict(), "error": str(exc)})
-        console.print(f"[red]Error:[/] {exc}")
-        raise typer.Exit(1) from None
+        return _Ending(1, f"[red]Error:[/] {exc}")
     store.finish_run(run_id, runner.stats.as_dict())
-    _summary(runner.stats)
+    return _Ending()
+
+
+def _report(stats: FetchStats, ending: _Ending) -> None:
+    """Print the summary once the progress view is gone, then exit with the run's code."""
+    if ending.exit_code != 1:
+        _summary(stats)
+    if ending.message:
+        console.print(ending.message)
+    if ending.exit_code:
+        raise typer.Exit(ending.exit_code)
 
 
 def _runner(
@@ -251,6 +269,7 @@ def _summary(stats: FetchStats) -> None:
     table = Table(title="Fetch summary", show_header=False, title_justify="left")
     table.add_column(style="bold")
     table.add_column(justify="right")
+    table.add_row("papers found", str(stats.found))
     for name in _SHOWN:
         table.add_row(_LABELS[name], str(counts[name]))
     if stats.requests:
