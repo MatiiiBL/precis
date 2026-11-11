@@ -18,16 +18,24 @@ from precis.llm import (
 from precis.llm.clock import ManualClock
 from precis.llm.fake import FakeAnthropic, FakeReply, Faults, ServerLimits
 from precis.llm.pricing import cost
-from precis.store import Store
+from precis.store import BatchItem, Store
 
 from .helpers import config, echo, request
 
 
 def gateway(
-    fake: FakeAnthropic, store: Store, clock: ManualClock, **sections: dict[str, Any]
+    fake: FakeAnthropic,
+    store: Store,
+    clock: ManualClock,
+    *,
+    run_id: str = "run-1",
+    offline: bool = False,
+    **sections: dict[str, Any],
 ) -> Gateway:
     sections.setdefault("pipeline", {"fallbacks": False})
-    return Gateway(fake, store, run_id="run-1", config=config(**sections), clock=clock)
+    return Gateway(
+        fake, store, run_id=run_id, config=config(**sections), clock=clock, offline=offline
+    )
 
 
 async def test_reply_is_recorded_with_its_cost(
@@ -477,3 +485,60 @@ async def test_budget_reserves_output_up_to_the_largest_reply_seen(
     await gw.create(request("second", max_tokens=16_000), stage="read")
     with pytest.raises(BudgetExceeded):
         await gw.create(request("other stage", max_tokens=16_000), stage="verify")
+
+
+async def test_offline_replies_are_never_served_to_a_real_run(
+    fake: FakeAnthropic, store: Store, clock: ManualClock
+) -> None:
+    offline = gateway(fake, store, clock, run_id="offline-1", offline=True)
+    await offline.create(request("same"), stage="read")
+    real = gateway(fake, store, clock, run_id="real")
+    await real.create(request("same"), stage="read")
+
+    assert len(fake.requests) == 2
+    [o] = store.calls(run_id="offline-1")
+    [r] = store.calls(run_id="real")
+    assert (o.offline, r.offline) == (True, False)
+    assert (o.status, r.status) == ("ok", "ok")
+    assert o.request_hash != r.request_hash
+
+    # Each kind still replays its own replies, cache scopes included.
+    again = gateway(fake, store, clock, run_id="offline-2", offline=True)
+    await again.create(request("same"), stage="read")
+    with again.cache_scope("attempt-2"):
+        await again.create(request("same"), stage="read")
+    assert len(fake.requests) == 3
+    assert [(c.status, c.offline) for c in store.calls(run_id="offline-2")] == [
+        ("cached", True),
+        ("ok", True),
+    ]
+
+
+async def test_budget_counts_spend_of_its_own_kind_only(
+    fake: FakeAnthropic, store: Store, clock: ManualClock
+) -> None:
+    offline = gateway(fake, store, clock, run_id="offline-1", offline=True)
+    await offline.create(request("a"), stage="read")
+    assert offline.spent_usd > 0
+    assert offline.stats().offline
+
+    real = gateway(fake, store, clock, run_id="real")
+    assert real.total_spent_usd == 0
+    assert not real.stats().offline
+    await real.create(request("b"), stage="read")
+
+    later = gateway(fake, store, clock, run_id="offline-2", offline=True)
+    assert later.total_spent_usd == pytest.approx(offline.spent_usd)
+
+
+async def test_an_offline_gateway_leaves_real_batches_alone(
+    fake: FakeAnthropic, store: Store, clock: ManualClock
+) -> None:
+    item = BatchItem(custom_id="req-1", request_hash="h1", stage="read", paper_id=None)
+    store.record_batch("msgbatch_real", [item])
+    offline = gateway(fake, store, clock, offline=True)
+    await offline.create(request("x"), stage="read")
+    await offline.aclose()
+    # Collecting it would ask the offline client for a batch it never made,
+    # and a batch it cannot find is given up on: the paid results would be lost.
+    assert store.open_batches() == [("msgbatch_real", [item])]

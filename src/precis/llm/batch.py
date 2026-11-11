@@ -103,8 +103,11 @@ class BatchQueue:
         rng: random.Random,
         store: Store,
         on_result: OnResult,
+        *,
+        offline: bool = False,
     ) -> None:
         self._client = client
+        self._offline = offline
         self._clock = clock
         self._limits = limits
         self._rng = rng
@@ -150,7 +153,7 @@ class BatchQueue:
         if self._collecting:
             return
         self._collecting = True
-        open_batches = self._store.open_batches()
+        open_batches = self._store.open_batches(offline=self._offline)
         if open_batches:
             log.info("collecting %d batches left open by earlier runs", len(open_batches))
         for batch_id, refs in open_batches:
@@ -291,7 +294,7 @@ class BatchQueue:
             return
         for item in items:
             item.attempts += 1
-        self._store.record_batch(batch.id, [i.ref for i in items])
+        self._store.record_batch(batch.id, [i.ref for i in items], offline=self._offline)
         self._batches_sent += 1
         self._open.add(batch.id)
         log.info("sent batch %s with %d requests", batch.id, len(items))

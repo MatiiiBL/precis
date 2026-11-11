@@ -18,7 +18,7 @@ from precis.config import Config
 from precis.corpus.load import load_papers
 from precis.llm import Gateway, ScaledClock, UnpricedModelError, make_client
 from precis.models import Stage, StageStatus
-from precis.offline import offline_client
+from precis.offline import offline_client, offline_conflict
 from precis.pipeline import PIPELINE_STAGES, LiveProgress, Pipeline, batch_settings
 from precis.store import Store
 
@@ -119,6 +119,9 @@ def run_command(
         if not paper_ids:
             console.print("No fetched papers in the store; run [bold]precis fetch[/bold] first.")
             raise typer.Exit(1)
+        if offline and (conflict := offline_conflict(store)):
+            console.print(f"[red]Cannot run offline:[/red] {conflict}")
+            raise typer.Exit(1)
         if mode is Mode.BATCH:
             config = batch_settings(config, len(paper_ids))
         # Offline, simulated time runs fast so that batch waits (minutes of
@@ -127,7 +130,13 @@ def run_command(
         client = offline_client(clock=clock) if offline else make_client(config)
         try:
             gateway = Gateway(
-                client, store, run_id=new_run_id(), config=config, clock=clock, mode=mode.value
+                client,
+                store,
+                run_id=new_run_id(),
+                config=config,
+                clock=clock,
+                mode=mode.value,
+                offline=offline,
             )
         except UnpricedModelError as e:
             console.print(f"[red]Cannot start the run:[/red] {e}")
@@ -230,6 +239,8 @@ def _runs_table(runs: list[dict[str, Any]]) -> Table:
             if stats.get("budget_reached")
             else ""
         )
+        if (run["config"] or {}).get("offline"):
+            note = f"offline, {note}" if note else "offline"
         table.add_row(
             run["run_id"],
             f"{run['started_at']:%Y-%m-%d %H:%M}",
@@ -249,7 +260,7 @@ def _usage_table(store: Store) -> Table:
     for row in store.usage():
         table.add_row(
             row.stage,
-            row.model,
+            f"{row.model} (offline)" if row.offline else row.model,
             f"{row.calls:,}",
             f"{row.cached_calls:,}",
             f"{row.input_tokens + row.cache_creation_input_tokens:,}",

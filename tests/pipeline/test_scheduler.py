@@ -8,10 +8,11 @@ from typing import Any
 import pytest
 
 from precis.corpus.load import load_papers
+from precis.llm import Gateway, ManualClock
 from precis.llm.fake import FakeReply
 from precis.llm.gateway import request_hash_of
 from precis.models import RevisionResult, Stage, StageRecord, StageStatus
-from precis.pipeline import batch_settings, hashing
+from precis.pipeline import Pipeline, batch_settings, hashing
 
 from .helpers import add_papers, brief_title, config, setup
 
@@ -325,3 +326,22 @@ async def test_a_new_summary_marks_later_stages_pending() -> None:
     [result] = load_papers(s.store)
     assert result.verification is None
     assert not result.revised
+
+
+async def test_a_real_run_redoes_what_an_offline_run_did() -> None:
+    s = setup()
+    ids = add_papers(s.store, 3)
+    offline = Gateway(
+        s.fake, s.store, run_id="offline", config=s.config, clock=ManualClock(), offline=True
+    )
+    await Pipeline(s.config, s.store, offline).run(ids, ALL)
+    offline_requests = len(s.fake.requests)
+
+    stats = await s.pipeline("real").run(ids, ALL)
+
+    assert stats["stages"]["read"]["cached"] == 0
+    assert stats["papers_finished"] == 3
+    # The same work again, every request sent: nothing came from the offline cache.
+    assert len(s.fake.requests) == 2 * offline_requests
+    assert not any(call.offline for call in s.store.calls(run_id="real"))
+    assert s.store.runs()[0]["config"]["offline"] is True

@@ -298,7 +298,8 @@ verification), so faithfulness before and after revision can be compared.
   `running` by a crash back to `pending`; the `fetch` rows of a concurrent
   `precis fetch` are not touched.
 - **Budget.** `budget.max_cost_usd` (`--max-cost`) caps the store's total
-  recorded spend, over every run. `BudgetExceeded` from the gateway leaves
+  recorded spend, over every run (offline calls are not spend; see
+  [runtime.md](runtime.md#store)). `BudgetExceeded` from the gateway leaves
   the stage `pending` with the reason and stops admitting papers; papers in
   flight finish if their requests still fit. To finish the rest, raise the
   cap.
@@ -432,6 +433,13 @@ corrected). The responses carry no usage; `FakeAnthropic` computes it from
 the prompt, modelling the prompt cache. Offline runs use a `ScaledClock`
 running 600x, so batch mode's queueing and polling take a fraction of a
 second.
+
+An offline run's stages are stored under their own `config_hash`
+(`hashing.for_client`) and its replies under their own cache keys, so
+running `precis run` with an API key on the same store redoes every stage
+with the model instead of keeping the offline summaries. The reverse is
+refused: `precis run --offline` on a store that holds paid results exits
+with an error rather than replace them; run it on a copy.
 
 ## 9. Limitations
 

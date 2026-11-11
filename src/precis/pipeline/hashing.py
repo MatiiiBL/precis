@@ -8,6 +8,10 @@ in code, the options that shape its requests, and the inputs it reads (the
 document, or the summary and verification of the stage before).
 Including the inputs means that a changed summary re-runs its verification
 even when no setting changed.
+
+Stages answered by the offline client hash apart (``for_client``), so a run
+against the API on the same store redoes them instead of keeping offline
+summaries as if a model had written them.
 """
 
 from __future__ import annotations
@@ -40,6 +44,11 @@ def _hash(parts: dict[str, Any]) -> str:
 def _stage_hash(parts: dict[str, Any]) -> str:
     """A stage hash also covers the request text written in code (briefs, notices, rendering)."""
     return _hash({**parts, "format": messages.REQUEST_FORMAT_VERSION})
+
+
+def for_client(config_hash: str, *, offline: bool) -> str:
+    """The hash a stage is stored under: offline stages get their own."""
+    return _hash({"offline": config_hash}) if offline else config_hash
 
 
 def _role(config: AgentConfig) -> dict[str, Any]:

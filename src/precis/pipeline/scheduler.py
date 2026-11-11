@@ -145,6 +145,7 @@ class Pipeline:
                 "stages": [s.value for s in wanted],
                 "papers": len(paper_ids),
                 "mode": self.gateway.mode,
+                "offline": self.gateway.offline,
                 "config": self.config.model_dump(mode="json"),
             },
         )
@@ -247,6 +248,9 @@ class Pipeline:
         await self._execute(paper, stage, config_hash, record)
 
     def _config_hash(self, paper: _Paper, stage: Stage) -> str:
+        return hashing.for_client(self._settings_hash(paper, stage), offline=self.gateway.offline)
+
+    def _settings_hash(self, paper: _Paper, stage: Stage) -> str:
         agents = self.config.agents
         if stage is Stage.READ:
             return hashing.read_hash(agents, paper.meta, paper.doc)

@@ -1,14 +1,14 @@
 """``precis run``, ``precis status`` and ``precis export`` with the offline client."""
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner, Result
 
 from precis.cli import app
-from precis.models import Stage, StageStatus
+from precis.models import LLMCall, Stage, StageStatus
 from precis.store import Store
 
 from .helpers import add_papers, paper
@@ -40,7 +40,7 @@ def test_offline_run_then_status_and_export(store_path: Path, tmp_path: Path) ->
     assert status.exit_code == 0, status.output
     assert "4 papers" in status.output
     assert "Recent runs" in status.output
-    assert "claude-opus-5-5" in status.output
+    assert "claude-opus-5-5 (offline)" in status.output
 
     out = tmp_path / "out" / "summaries.jsonl"
     export = precis(store_path, "export", "--out", str(out))
@@ -141,3 +141,25 @@ def test_limit_picks_fetched_papers_and_blocked_reasons_are_counted(store_path: 
     assert named.exit_code == 0, named.output
     assert "1 of 2 papers finished, 1 blocked" in named.output
     assert "Blocked: 1 no document; run precis fetch." in named.output
+
+
+def test_offline_run_refuses_a_store_with_paid_results(store_path: Path) -> None:
+    with Store(store_path) as store:
+        store.record_call(
+            LLMCall(
+                call_id="c1",
+                run_id="real",
+                paper_id=None,
+                stage="read",
+                model="claude-opus-5-5",
+                request_hash="h",
+                status="ok",
+                cost_usd=0.1,
+                started_at=datetime.now(UTC),
+            )
+        )
+    result = precis(store_path, "run", "--offline")
+    assert result.exit_code == 1
+    assert "paid for with the API (1 requests)" in result.output
+    with Store(store_path) as store:
+        assert store.stage_counts()[Stage.READ][StageStatus.DONE] == 0

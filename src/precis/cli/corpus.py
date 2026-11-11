@@ -33,7 +33,7 @@ from precis.corpus.synthesis import (
 from precis.corpus.topics import TOPICS_ARTIFACT, TopicModel, build_topics
 from precis.llm import AsyncAnthropicLike, Clock, Gateway, make_client
 from precis.models import CorpusReport
-from precis.offline import offline_client
+from precis.offline import offline_client, offline_conflict
 from precis.store import Store
 from precis.util import sha256_hex
 
@@ -68,21 +68,32 @@ async def with_gateway[T](
     *,
     client: AsyncAnthropicLike,
     clock: Clock | None = None,
+    offline: bool = False,
 ) -> tuple[T, Gateway]:
     """Run ``work`` with a gateway that is recorded as its own run in the store.
 
     The run's stats are stored even when ``work`` fails, so the spend of a
-    failed command is still accounted for.
+    failed command is still accounted for. ``offline`` says that ``client``
+    is the offline client (see ``Gateway``).
     """
     run_id = f"{command}-{datetime.now(UTC):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:6]}"
-    store.start_run(run_id, {"command": command, "config": config.model_dump(mode="json")})
-    gateway = Gateway(client, store, run_id=run_id, config=config, clock=clock)
+    store.start_run(
+        run_id,
+        {"command": command, "offline": offline, "config": config.model_dump(mode="json")},
+    )
+    gateway = Gateway(client, store, run_id=run_id, config=config, clock=clock, offline=offline)
     try:
         result = await work(gateway)
     finally:
         await gateway.aclose()
         store.finish_run(run_id, asdict(gateway.stats()))
     return result, gateway
+
+
+def refuse_offline_over_real(store: Store, *, offline: bool) -> None:
+    """Stop an offline command that would replace results paid for with the API."""
+    if offline and (conflict := offline_conflict(store)):
+        raise fail(f"Cannot run offline: {conflict}")
 
 
 def require_papers(store: Store) -> list[FinishedPaper]:
@@ -153,6 +164,7 @@ def topics_command(
     """Cluster the summaries into topics and name each one."""
     config = config_of(ctx)
     with Store(config.store_path) as store:
+        refuse_offline_over_real(store, offline=offline)
         papers = require_papers(store)
         agent = config.agents.synthesizer
 
@@ -160,7 +172,9 @@ def topics_command(
             return await build_topics(gw, papers, config.corpus, agent, k=k)
 
         client = model_client(config, offline=offline)
-        model, gateway = asyncio.run(with_gateway(store, config, "topics", work, client=client))
+        model, gateway = asyncio.run(
+            with_gateway(store, config, "topics", work, client=client, offline=offline)
+        )
         store.put_artifact(TOPICS_ARTIFACT, model)
     console.print(_topics_table(model))
     if model.silhouette:
@@ -180,6 +194,7 @@ def report_command(
     """Write a synthesis of every topic and render the report as Markdown."""
     config = config_of(ctx)
     with Store(config.store_path) as store:
+        refuse_offline_over_real(store, offline=offline)
         papers = require_papers(store)
         model = load_topics(store)
         if model is None:
@@ -196,7 +211,12 @@ def report_command(
 
         (report, stats), gateway = asyncio.run(
             with_gateway(
-                store, config, "report", work, client=model_client(config, offline=offline)
+                store,
+                config,
+                "report",
+                work,
+                client=model_client(config, offline=offline),
+                offline=offline,
             )
         )
         stats = stats.model_copy(update={"topics_digest": topics_digest(model)})
@@ -208,7 +228,7 @@ def report_command(
             papers,
             stats=stats,
             faith=faithfulness(papers),
-            cost=spend(store.usage()),
+            cost=spend(store.usage(offline=False)),
         )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text)
@@ -247,7 +267,7 @@ def site_command(
             papers=papers,
             topics=model.topics,
             report=stored[0] if stored else None,
-            cost=spend(store.usage()),
+            cost=spend(store.usage(offline=False)),
         )
         build = build_site(content, out)
     console.print(

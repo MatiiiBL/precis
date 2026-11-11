@@ -238,14 +238,20 @@ class LLMCall(Record):
     stop_reason: str | None = None
     request_id: str | None = None
     batch: bool = False
+    offline: bool = Field(
+        default=False,
+        description="Answered by the offline client: the cost is what the API would have "
+        "charged, and none of it was spent.",
+    )
     started_at: datetime
 
 
 class UsageRow(Record):
-    """Aggregated usage for one (stage, model) pair."""
+    """Aggregated usage for one (stage, model) pair, offline calls apart."""
 
     stage: str
     model: str
+    offline: bool = False
     calls: int
     cached_calls: int
     input_tokens: int

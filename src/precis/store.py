@@ -140,9 +140,17 @@ def _migrate_v2(db: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v3(db: sqlite3.Connection) -> None:
+    # Calls and batches of the offline client, kept apart from real ones:
+    # offline calls are not spend, so the budget and the reports must not
+    # count them, and a run must only collect batches its own client made.
+    db.execute("ALTER TABLE llm_calls ADD COLUMN offline INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE batches ADD COLUMN offline INTEGER NOT NULL DEFAULT 0")
+
+
 # MIGRATIONS[i] upgrades a store from schema version i to i + 1. Append only:
 # a released migration never changes, because stores in the wild have run it.
-MIGRATIONS: Sequence[Migration] = (_migrate_v1, _migrate_v2)
+MIGRATIONS: Sequence[Migration] = (_migrate_v1, _migrate_v2, _migrate_v3)
 
 
 class SchemaError(RuntimeError):
@@ -382,8 +390,8 @@ class Store:
         self._db.execute(
             "INSERT OR REPLACE INTO llm_calls (call_id, run_id, paper_id, stage, model, status, "
             "started_at, input_tokens, output_tokens, cache_creation_input_tokens, "
-            "cache_read_input_tokens, cost_usd, json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "cache_read_input_tokens, cost_usd, offline, json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 call.call_id,
                 call.run_id,
@@ -397,6 +405,7 @@ class Store:
                 call.cache_creation_input_tokens,
                 call.cache_read_input_tokens,
                 call.cost_usd,
+                call.offline,
                 call.model_dump_json(),
             ),
         )
@@ -414,34 +423,47 @@ class Store:
         sql += " ORDER BY started_at, call_id"
         return [LLMCall.model_validate_json(r[0]) for r in self._db.execute(sql, args)]
 
-    def usage(self, *, run_id: str | None = None) -> list[UsageRow]:
-        """Token and cost totals per (stage, model), summed by SQLite rather than in Python."""
+    def usage(self, *, run_id: str | None = None, offline: bool | None = None) -> list[UsageRow]:
+        """Token and cost totals per (stage, model), summed by SQLite rather than in Python.
+
+        Offline calls get rows of their own; ``offline=False`` keeps only the
+        paid calls, ``offline=True`` only the offline ones.
+        """
         sql = (
-            "SELECT stage, model, COUNT(*), SUM(status = 'cached'), SUM(input_tokens), "
-            "SUM(output_tokens), SUM(cache_creation_input_tokens), "
-            "SUM(cache_read_input_tokens), SUM(cost_usd) FROM llm_calls"
+            "SELECT stage, model, offline, COUNT(*), SUM(status = 'cached'), "
+            "SUM(input_tokens), SUM(output_tokens), SUM(cache_creation_input_tokens), "
+            "SUM(cache_read_input_tokens), SUM(cost_usd) FROM llm_calls WHERE 1 = 1"
         )
         args: list[Any] = []
         if run_id is not None:
-            sql += " WHERE run_id = ?"
+            sql += " AND run_id = ?"
             args.append(run_id)
-        sql += " GROUP BY stage, model ORDER BY stage, model"
+        if offline is not None:
+            sql += " AND offline = ?"
+            args.append(offline)
+        sql += " GROUP BY stage, model, offline ORDER BY stage, model, offline"
         return [
             UsageRow(
-                stage=stage,
-                model=model,
-                calls=calls,
-                cached_calls=cached,
-                input_tokens=inp,
-                output_tokens=out,
-                cache_creation_input_tokens=cache_write,
-                cache_read_input_tokens=cache_read,
-                cost_usd=cost,
+                stage=row[0],
+                model=row[1],
+                offline=bool(row[2]),
+                calls=row[3],
+                cached_calls=row[4],
+                input_tokens=row[5],
+                output_tokens=row[6],
+                cache_creation_input_tokens=row[7],
+                cache_read_input_tokens=row[8],
+                cost_usd=row[9],
             )
-            for stage, model, calls, cached, inp, out, cache_write, cache_read, cost in (
-                self._db.execute(sql, args)
-            )
+            for row in self._db.execute(sql, args)
         ]
+
+    def paid_calls(self) -> int:
+        """Requests answered by the API: not by the response cache or the offline client."""
+        (count,) = self._db.execute(
+            "SELECT COUNT(*) FROM llm_calls WHERE status IN ('ok', 'refusal') AND offline = 0"
+        ).fetchone()
+        return int(count)
 
     def cache_get(self, request_hash: str) -> dict[str, Any] | None:
         row = self._db.execute(
@@ -470,18 +492,26 @@ class Store:
     # message batches
     # ------------------------------------------------------------------
 
-    def record_batch(self, batch_id: str, items: Sequence[BatchItem]) -> None:
+    def record_batch(
+        self, batch_id: str, items: Sequence[BatchItem], *, offline: bool = False
+    ) -> None:
         """Remember a batch as soon as it is created, until its results are collected."""
         self._db.execute(
-            "INSERT OR REPLACE INTO batches (batch_id, created_at, json) VALUES (?, ?, ?)",
-            (batch_id, _now(), json.dumps([asdict(item) for item in items])),
+            "INSERT OR REPLACE INTO batches (batch_id, created_at, offline, json) "
+            "VALUES (?, ?, ?, ?)",
+            (batch_id, _now(), offline, json.dumps([asdict(item) for item in items])),
         )
 
-    def open_batches(self) -> list[tuple[str, list[BatchItem]]]:
-        """Batches whose results have not been collected yet, oldest first."""
+    def open_batches(self, *, offline: bool = False) -> list[tuple[str, list[BatchItem]]]:
+        """Batches whose results have not been collected yet, oldest first.
+
+        Only the real client's batches, or only the offline client's: the
+        other client does not know their ids.
+        """
         rows = self._db.execute(
-            "SELECT batch_id, json FROM batches WHERE collected_at IS NULL "
-            "ORDER BY created_at, batch_id"
+            "SELECT batch_id, json FROM batches WHERE collected_at IS NULL AND offline = ? "
+            "ORDER BY created_at, batch_id",
+            (offline,),
         )
         return [
             (batch_id, [BatchItem(**item) for item in json.loads(raw)]) for batch_id, raw in rows

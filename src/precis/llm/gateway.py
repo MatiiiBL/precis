@@ -81,6 +81,8 @@ class GatewayStats:
     rpm_limit: float | None = None
     itpm_limit: float | None = None
     otpm_limit: float | None = None
+    offline: bool = False
+    """The gateway answers with the offline client: costs are what the API would charge."""
 
 
 @dataclass
@@ -141,8 +143,16 @@ class Gateway:
         config: Config,
         clock: Clock | None = None,
         mode: Literal["online", "batch"] = "online",
+        offline: bool = False,
     ) -> None:
         """Check that every configured model is priced, then set up admission control.
+
+        ``offline`` says that ``client`` is the offline client, not the API.
+        Its replies are cached under their own keys and its calls recorded
+        as offline, so a later run against the API on the same store never
+        replays them, and the budget counts real spend only (an offline
+        gateway's budget counts offline calls only, so ``--max-cost`` can be
+        tried offline).
 
         Raises ``precis.llm.pricing.UnpricedModelError`` for a model (or one
         of its fallback targets) with no price: running it would record
@@ -154,6 +164,7 @@ class Gateway:
         self._config = config
         self._clock: Clock = clock or RealClock()
         self._mode: Literal["online", "batch"] = mode
+        self._offline = offline
         self._rng = random.Random(sha256_hex(run_id))
         check_priced(self._models_in_use())
         limits = config.limits
@@ -170,11 +181,11 @@ class Gateway:
         # Built in both modes: an online run also collects the results of
         # batches an earlier batch-mode run left open.
         self._batches = BatchQueue(
-            client, self._clock, limits, self._rng, store, self._on_batch_result
+            client, self._clock, limits, self._rng, store, self._on_batch_result, offline=offline
         )
         self._counters = _Counters()
         self._reserved_usd = 0.0
-        self._spent_before_usd = sum(row.cost_usd for row in store.usage())
+        self._spent_before_usd = sum(row.cost_usd for row in store.usage(offline=offline))
         self._output_avg: dict[str, float] = {}
         self._output_max: dict[str, int] = {}
         self._input_ratio: dict[str, float] = {}
@@ -188,13 +199,20 @@ class Gateway:
         return self._mode
 
     @property
+    def offline(self) -> bool:
+        return self._offline
+
+    @property
     def spent_usd(self) -> float:
         """What this gateway has spent (this run)."""
         return self._counters.cost_usd
 
     @property
     def total_spent_usd(self) -> float:
-        """Everything recorded in the store, earlier runs included: what the budget caps."""
+        """Everything recorded in the store, earlier runs included: what the budget caps.
+
+        Real and offline spend are counted apart; this is the gateway's own kind.
+        """
         return self._spent_before_usd + self._counters.cost_usd
 
     def stats(self) -> GatewayStats:
@@ -223,6 +241,7 @@ class Gateway:
             rpm_limit=self._admission.requests.rate_per_min,
             itpm_limit=self._admission.input_tokens.rate_per_min,
             otpm_limit=self._admission.output_tokens.rate_per_min,
+            offline=self._offline,
         )
 
     async def aclose(self) -> None:
@@ -251,6 +270,13 @@ class Gateway:
         finally:
             _CACHE_SALT.reset(token)
 
+    def _salt(self) -> str:
+        """The cache-key salt: the cache scope, under an ``offline`` namespace when offline."""
+        scope = _CACHE_SALT.get()
+        if not self._offline:
+            return scope
+        return f"offline/{scope}" if scope else "offline"
+
     async def create(
         self, params: dict[str, Any], *, stage: str, paper_id: str | None = None
     ) -> Reply:
@@ -262,7 +288,7 @@ class Gateway:
         """
         model = str(params.get("model", ""))
         check_priced([model])
-        request_hash = request_hash_of(params, _CACHE_SALT.get())
+        request_hash = request_hash_of(params, self._salt())
         started_at = datetime.now(UTC)
         if self._config.pipeline.use_cache:
             cached = self._store.cache_get(request_hash)
@@ -347,6 +373,7 @@ class Gateway:
                 request_hash=request_hash,
                 status="cached",
                 stop_reason=reply.stop_reason,
+                offline=self._offline,
                 started_at=started_at,
             )
         )
@@ -589,6 +616,7 @@ class Gateway:
             stop_reason=reply.stop_reason,
             request_id=response.request_id,
             batch=response.batch,
+            offline=self._offline,
             started_at=started_at,
         )
         # Refusals, and replies cut off at max_tokens (which the caller will
@@ -622,6 +650,7 @@ class Gateway:
                 request_hash=request_hash,
                 attempts=error.attempts,
                 status="error",
+                offline=self._offline,
                 started_at=started_at,
             )
         )

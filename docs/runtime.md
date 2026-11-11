@@ -100,7 +100,27 @@ The schema carries a version number. `MIGRATIONS[i]` upgrades version `i` to
 `i + 1` inside one transaction; opening an older store runs the missing
 migrations, and opening a store written by a newer version raises
 `SchemaError` instead of guessing. The test suite exercises the path by
-appending a migration and reopening an existing file.
+appending a migration and reopening an existing file. Version 2 added the
+`batches` table; version 3 an `offline` column on `llm_calls` and `batches`
+(below), with existing rows marked real.
+
+**Offline results.** Commands run with `--offline` write into the same store as real
+runs, so the two must never be mistaken for each other. A gateway built
+with `offline=True` mixes `offline` into the salt of every request hash, so
+its replies are cached under keys no real request has (a real run after an
+offline one sends every request; each kind still replays its own cache,
+cache scopes included). Its calls are recorded with `offline` set:
+`usage()` reports them in rows of their own, `paid_calls()` leaves them
+out, the report and the site show real spend only, and the budget of a
+real run does not count them (an offline gateway's budget counts offline
+calls, so `--max-cost` can be tried offline). Its batches are recorded as
+offline too, and each kind of gateway collects only its own open batches:
+asked for a batch it never made, the other client answers 404, and the
+queue would give the batch up, losing results that were paid for. The
+scheduler hashes offline stages apart (`hashing.for_client`), so offline
+summaries are redone, not kept, by a real run. The opposite direction is
+refused: offline `run`, `topics` and `report` exit with an error on a
+store with paid calls, since their results would replace the paid ones.
 
 ## Admission control
 
@@ -242,8 +262,9 @@ cached. Every model a fallback may route to is checked for a price when the
 gateway starts.
 
 `budget.max_cost_usd` is a cap on the total spend recorded in the store,
-earlier runs included: the gateway starts from the sum of `usage()`
-(`total_spent_usd`; `spent_usd` is this run's share). So `--max-cost 150`,
+earlier runs included: the gateway starts from the sum of `usage()` over
+calls of its own kind, real or offline (`total_spent_usd`; `spent_usd` is
+this run's share). So `--max-cost 150`,
 interrupted and resumed with `--max-cost 200`, spends at most $200, not
 $350. Before each request the gateway reserves what it may cost and refuses
 with `BudgetExceeded` when the total spent, plus the reservations of

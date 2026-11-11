@@ -92,7 +92,8 @@ def _evaluate[R: BaseModel](
             return await evaluate(gw, store, clock, papers, config)
 
         result, gateway = _run(
-            clock, with_gateway(store, config, command, work, client=client, clock=clock)
+            clock,
+            with_gateway(store, config, command, work, client=client, clock=clock, offline=offline),
         )
     console.print(f"Spent ${gateway.spent_usd:.2f} in {gateway.stats().calls} requests.")
     return config, result

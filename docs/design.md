@@ -107,14 +107,17 @@ class Store:
         # the call and its cached response (None: not cacheable) in one transaction
     def calls(self, *, run_id: str | None = None,
               paper_id: str | None = None) -> list[LLMCall]: ...
-    def usage(self, *, run_id: str | None = None) -> list[UsageRow]: ...
+    def usage(self, *, run_id: str | None = None,
+              offline: bool | None = None) -> list[UsageRow]: ...  # offline calls apart
+    def paid_calls(self) -> int: ...    # answered by the API (not the cache, not offline)
     def cache_get(self, request_hash: str) -> dict[str, Any] | None: ...
     def cache_put(self, request_hash: str, response: dict[str, Any]) -> None: ...
     def cache_delete(self, request_hash: str) -> None: ...
 
     # message batches, recorded from creation until their results are read
-    def record_batch(self, batch_id: str, items: Sequence[BatchItem]) -> None: ...
-    def open_batches(self) -> list[tuple[str, list[BatchItem]]]: ...
+    def record_batch(self, batch_id: str, items: Sequence[BatchItem], *,
+                     offline: bool = False) -> None: ...
+    def open_batches(self, *, offline: bool = False) -> list[tuple[str, list[BatchItem]]]: ...
     def close_batch(self, batch_id: str) -> None: ...
 
     # runs and corpus artifacts (topics, syntheses, reports, eval results)
@@ -137,13 +140,15 @@ Anthropic SDK directly.
 class Gateway:
     def __init__(self, client: AsyncAnthropicLike, store: Store, *, run_id: str,
                  config: Config, clock: Clock | None = None,
-                 mode: Literal["online", "batch"] = "online") -> None: ...
+                 mode: Literal["online", "batch"] = "online",
+                 offline: bool = False) -> None: ...   # client is the offline fake
     async def create(self, params: dict[str, Any], *, stage: str,
                      paper_id: str | None = None) -> Reply: ...  # Message | BetaMessage
     @property
     def spent_usd(self) -> float: ...       # this run
     @property
-    def total_spent_usd(self) -> float: ... # everything in the store: what the budget caps
+    def total_spent_usd(self) -> float: ... # everything in the store of the gateway's
+                                            # kind (real or offline): what the budget caps
     def stats(self) -> GatewayStats: ...    # in flight, concurrency limit, calls,
                                             # retries, 429s, tokens, cost, ...
     async def aclose(self) -> None: ...     # stop; unfinished batches stay recorded
@@ -304,6 +309,12 @@ async def revise_summary(gw: Gateway, meta: PaperMeta, doc: Document, summary: P
 - `precis.offline` builds a `FakeAnthropic` whose responders play every role
   deterministically from the document text, so every command runs with
   `--offline`, without an API key; CI uses it for the end-to-end tests.
+  Offline results can share a store with real ones but never pass for them:
+  an offline gateway (`offline=True`) caches under its own keys, records its
+  calls and batches as offline (excluded from real spend and from the
+  budget of real runs), and offline stages hash apart, so a run against the
+  API redoes them. Offline `run`, `topics` and `report` refuse a store that
+  holds paid results, which they would replace.
 
 ## 8. Corpus, evaluation and benchmarks (`precis.corpus`, `precis.eval`)
 

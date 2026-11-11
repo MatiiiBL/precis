@@ -246,3 +246,67 @@ def test_version_1_store_gains_the_batches_table(tmp_path: Path) -> None:
     with Store(path) as s:
         assert s.schema_version == len(store_module.MIGRATIONS) >= 2
         assert s.open_batches() == []
+
+
+def test_offline_calls_are_kept_apart_from_paid_ones(store: Store) -> None:
+    store.record_call(_call("c1", cost_usd=0.5))
+    store.record_call(_call("c2", cost_usd=2.0, offline=True))
+    store.record_call(_call("c3", status="cached"))
+    store.record_call(_call("c4", status="error"))
+    store.record_call(_call("c5", status="refusal", cost_usd=0.1))
+
+    rows = {r.offline: r for r in store.usage()}
+    assert (rows[False].calls, rows[False].cost_usd) == (4, pytest.approx(0.6))
+    assert (rows[True].calls, rows[True].cost_usd) == (1, pytest.approx(2.0))
+    assert [r.offline for r in store.usage(offline=True)] == [True]
+    assert sum(r.cost_usd for r in store.usage(offline=False)) == pytest.approx(0.6)
+    assert store.paid_calls() == 2  # c1 and the refusal: answered by the API, and billed
+    assert store.calls(run_id="run-1")[1].offline
+
+
+def test_open_batches_belong_to_the_client_that_made_them(store: Store) -> None:
+    items = [BatchItem(custom_id="req-1", request_hash="h1", stage="read", paper_id="p1")]
+    store.record_batch("msgbatch_real", items)
+    store.record_batch("fakebatch_1", items, offline=True)
+    assert store.open_batches() == [("msgbatch_real", items)]
+    assert store.open_batches(offline=True) == [("fakebatch_1", items)]
+
+
+def test_version_2_store_keeps_its_calls_and_batches_as_real(tmp_path: Path) -> None:
+    path = tmp_path / "precis.db"
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+    db.execute("INSERT INTO schema_version VALUES (2)")
+    store_module.MIGRATIONS[0](db)
+    store_module.MIGRATIONS[1](db)
+    call = _call("c1", cost_usd=1.5)
+    db.execute(
+        "INSERT INTO llm_calls (call_id, run_id, paper_id, stage, model, status, started_at, "
+        "input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, "
+        "cost_usd, json) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)",
+        (
+            call.call_id,
+            call.run_id,
+            call.paper_id,
+            call.stage,
+            call.model,
+            call.status,
+            call.started_at.isoformat(),
+            call.cost_usd,
+            call.model_dump_json(exclude={"offline"}),
+        ),
+    )
+    db.execute(
+        "INSERT INTO batches (batch_id, created_at, json) VALUES ('msgbatch_1', '2026-01-01', ?)",
+        ('[{"custom_id": "req-1", "request_hash": "h1", "stage": "read", "paper_id": null}]',),
+    )
+    db.commit()
+    db.close()
+
+    with Store(path) as s:
+        assert s.schema_version == len(store_module.MIGRATIONS) >= 3
+        assert s.calls()[0] == call
+        assert [(r.offline, r.cost_usd) for r in s.usage()] == [(False, 1.5)]
+        assert s.paid_calls() == 1
+        assert [batch_id for batch_id, _ in s.open_batches()] == ["msgbatch_1"]
+        assert s.open_batches(offline=True) == []

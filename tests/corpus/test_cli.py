@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,7 @@ from typer.testing import CliRunner
 from corpus.factories import fill_store, themed_corpus
 from precis.cli import app
 from precis.cli.corpus import load_report, load_topics
+from precis.models import LLMCall
 from precis.store import Store
 
 runner = CliRunner()
@@ -82,3 +84,29 @@ def test_commands_explain_missing_inputs(tmp_path: Path) -> None:
         result = runner.invoke(app, ["--store", str(path), *command])
         assert result.exit_code == 1
         assert "precis topics" in result.output
+
+
+def test_offline_corpus_commands_refuse_a_store_with_paid_results(store_path: Path) -> None:
+    base = ["--store", str(store_path)]
+    assert runner.invoke(app, [*base, "topics", "--offline", "--k", "4"]).exit_code == 0
+    with Store(store_path) as store:
+        store.record_call(
+            LLMCall(
+                call_id="c1",
+                run_id="real",
+                paper_id=None,
+                stage="label",
+                model="claude-opus-5-5",
+                request_hash="h",
+                status="ok",
+                cost_usd=0.1,
+                started_at=datetime.now(UTC),
+            )
+        )
+        before = load_topics(store)
+    for command in ("topics", "report"):
+        result = runner.invoke(app, [*base, command, "--offline"])
+        assert result.exit_code == 1, result.output
+        assert "paid for with the API" in result.output
+    with Store(store_path) as store:
+        assert load_topics(store) == before
