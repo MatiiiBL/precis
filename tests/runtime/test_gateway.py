@@ -381,3 +381,43 @@ async def test_cache_scope_reaches_tasks_started_inside_it(
     # The scope ends with the block.
     await gw.create(request("a"), stage="read")
     assert len(fake.requests) == 2
+
+
+# ----------------------------------------------------------------------
+# streaming (review R6)
+# ----------------------------------------------------------------------
+
+
+async def test_requests_are_streamed(fake: FakeAnthropic, store: Store, clock: ManualClock) -> None:
+    gw = gateway(fake, store, clock, pipeline={"fallbacks": True})
+    await gw.create(request("online"), stage="read")
+    await gw.create(request("haiku", model="claude-haiku-5-5"), stage="judge")
+    assert fake.streamed == 2
+    assert store.calls()[0].request_id is not None
+
+
+async def test_an_error_event_mid_stream_is_an_overload(store: Store, clock: ManualClock) -> None:
+    fake = FakeAnthropic([echo], clock=clock)
+    fake.fail_next("stream_error")
+    gw = gateway(fake, store, clock, limits={"initial_concurrency": 8})
+    reply = await gw.create(request(), stage="read")
+    assert reply.content[0].type == "text"
+    stats = gw.stats()
+    assert (stats.overloaded, stats.retries, stats.concurrency_limit) == (1, 1, 4)
+
+
+async def test_timeouts_are_retried_at_most_once(
+    store: Store, clock: ManualClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake = FakeAnthropic([echo], clock=clock)
+    fake.fail_next("stream_timeout", "timeout")
+    gw = gateway(fake, store, clock)
+
+    with pytest.raises(GatewayError) as excinfo:
+        await gw.create(request(), stage="read")
+
+    assert excinfo.value.attempts == 2
+    assert len(fake.requests) == 2
+    assert gw.stats().timeouts == 2
+    # The attempt that timed out after the response started names its request.
+    assert "req_fake_" in caplog.text

@@ -248,3 +248,20 @@ async def test_batches_end_after_their_latency(clock: ManualClock) -> None:
     assert results["b"].type == "errored"
     assert results["b"].error.error.type == "invalid_request_error"
     assert (batch.request_counts.succeeded, batch.request_counts.errored) == (1, 1)
+
+
+async def test_streaming_returns_headers_and_the_final_message(clock: ManualClock) -> None:
+    fake = FakeAnthropic([echo], clock=clock, limits=ServerLimits(rpm=5, itpm=10**6, otpm=10**6))
+    async with fake.messages.stream(**request("streamed")) as stream:
+        assert stream.response.headers["anthropic-ratelimit-requests-limit"] == "5"
+        message = await stream.get_final_message()
+    assert message.content[0].type == "text"
+    assert message.content[0].text == "echo: streamed"
+    assert fake.streamed == 1
+
+    fake.fail_next("stream_error")
+    async with fake.messages.stream(**request()) as stream:
+        with pytest.raises(anthropic.APIStatusError) as excinfo:
+            await stream.get_final_message()
+    assert excinfo.value.status_code == 200
+    assert excinfo.value.type == "overloaded_error"

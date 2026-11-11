@@ -28,7 +28,7 @@ from anthropic.types.beta import BetaMessage
 from precis.config import Config
 from precis.llm.base import Reply
 from precis.llm.batch import BatchQueue
-from precis.llm.client import AsyncAnthropicLike
+from precis.llm.client import AsyncAnthropicLike, MessageStreamManagerLike
 from precis.llm.clock import Clock, RealClock
 from precis.llm.errors import BudgetExceeded, GatewayError, RefusalError
 from precis.llm.limiter import Admission, Outcome, Ticket, Usage
@@ -376,6 +376,7 @@ class Gateway:
         kwargs, beta = self._request_kwargs(params)
         limits = self._config.limits
         last_error: Exception | None = None
+        timeouts = 0
         for attempt in range(1, limits.max_attempts + 1):
             ticket = await self._admission.acquire(estimate.input_tokens, estimate.output_tokens)
             sent_at = self._clock.now()
@@ -387,7 +388,12 @@ class Gateway:
             except anthropic.APIConnectionError as e:
                 self._admission.release(ticket, Outcome.FAILURE)
                 if isinstance(e, anthropic.APITimeoutError):
+                    # The server may have generated (and billed) the reply,
+                    # so a timeout is worth one more try, not seven.
                     self._counters.timeouts += 1
+                    timeouts += 1
+                    if timeouts > 1:
+                        raise GatewayError(f"request timed out twice: {e}", attempts=attempt) from e
                 delay = self._backoff(attempt)
                 last_error = e
             except BaseException:
@@ -418,27 +424,42 @@ class Gateway:
         ) from last_error
 
     async def _call(self, kwargs: dict[str, Any], beta: bool) -> tuple[Reply, dict[str, str]]:
-        reply: Reply
+        """Send one streamed request and return the final message and the response headers.
+
+        Every request is streamed: a long generation (32k output tokens
+        with thinking can take many minutes) would otherwise sit on one
+        HTTP read until the timeout. The final message is rebuilt as a plain
+        ``Message``/``BetaMessage``, the same type a cache hit returns.
+        """
         if beta:
-            raw_beta = await self._client.beta.messages.with_raw_response.create(**kwargs)
-            reply = await raw_beta.parse()
-            headers = dict(raw_beta.headers)
-        else:
-            raw = await self._client.messages.with_raw_response.create(**kwargs)
-            reply = await raw.parse()
-            headers = dict(raw.headers)
-        return reply, headers
+            final, headers = await _stream(self._client.beta.messages.stream(**kwargs))
+            return BetaMessage.model_validate(final.to_dict(mode="json")), headers
+        message, headers = await _stream(self._client.messages.stream(**kwargs))
+        return Message.model_validate(message.to_dict(mode="json")), headers
 
     def _on_status_error(
         self, error: anthropic.APIStatusError, ticket: Ticket, attempt: int
     ) -> float:
-        """Classify a status error: release the slot and return the retry delay, or raise."""
+        """Classify a status error: release the slot and return the retry delay, or raise.
+
+        Errors inside a stream that has started arrive as the base
+        ``APIStatusError`` with status 200; their ``type`` says what they are.
+        """
         headers = error.response.headers
         self._admission.observe(headers)
         if isinstance(error, anthropic.EnforcedSpendLimitReachedError):
             # The monthly spend cap: retrying fails until access resumes.
             self._admission.release(ticket, Outcome.FAILURE)
             raise GatewayError(f"spend limit reached: {error}", attempts=attempt) from error
+        mid_stream = error.status_code == 200
+        if mid_stream and error.type == "overloaded_error":
+            self._counters.overloaded += 1
+            self._admission.release(ticket, Outcome.OVERLOAD)
+            return self._backoff(attempt)
+        if mid_stream and error.type in ("api_error", "rate_limit_error"):
+            self._counters.server_errors += 1
+            self._admission.release(ticket, Outcome.FAILURE)
+            return self._backoff(attempt)
         if isinstance(error, anthropic.RateLimitError):
             self._counters.rate_limited += 1
             self._admission.release(ticket, Outcome.OVERLOAD)
@@ -549,6 +570,16 @@ class Gateway:
             for model in list(models):
                 models.update(FALLBACK_TARGETS.get(model, ()))
         return models
+
+
+async def _stream[T](manager: MessageStreamManagerLike[T]) -> tuple[T, dict[str, str]]:
+    async with manager as stream:
+        headers = dict(stream.response.headers)
+        try:
+            return await stream.get_final_message(), headers
+        except anthropic.APITimeoutError:
+            log.warning("request %s timed out mid-stream", headers.get("request-id"))
+            raise
 
 
 def request_hash_of(params: dict[str, Any], salt: str = "") -> str:

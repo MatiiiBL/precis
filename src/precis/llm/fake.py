@@ -35,9 +35,10 @@ import asyncio
 import itertools
 import math
 import random
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import TracebackType
 from typing import Any, Literal, NoReturn
 
 import anthropic
@@ -53,11 +54,21 @@ from precis.llm.pricing import PRICES
 from precis.util import canonical_json, estimate_tokens, sha256_hex
 
 type Responder = Callable[[dict[str, Any]], FakeReply | None]
-type FaultKind = Literal["rate_limit", "overloaded", "server_error", "timeout", "bad_request"]
+type FaultKind = Literal[
+    "rate_limit",
+    "overloaded",
+    "server_error",
+    "timeout",
+    "bad_request",
+    "stream_error",  # an overloaded_error event after a streamed response started
+    "stream_timeout",  # the stream stops sending data after it started
+]
 
 # Fixed origin for the timestamps the fake reports (batch times, reset
 # headers), so they depend only on the clock and not on the wall date.
 EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
+
+_STREAM_FAULTS = ("stream_error", "stream_timeout")
 
 # The API routes ``fallbacks="default"`` by refusal category; the fake always
 # takes a model's first listed target, and never retries these categories.
@@ -221,6 +232,7 @@ class FakeAnthropic:
         self.requests: list[dict[str, Any]] = []
         self.in_flight = 0
         self.max_in_flight = 0
+        self.streamed = 0
         self._scripted: list[FaultKind] = []
         self._limits: ServerLimits | None = None
         self._buckets: tuple[TokenBucket, TokenBucket, TokenBucket] | None = None
@@ -267,8 +279,12 @@ class FakeAnthropic:
     # the request path
     # ------------------------------------------------------------------
 
-    async def _create(self, params: dict[str, Any], *, beta: bool) -> tuple[dict[str, Any], int]:
-        """Serve one request; returns the message as JSON and its sequence number."""
+    async def _create(self, params: dict[str, Any], *, beta: bool, stream: bool = False) -> _Served:
+        """Serve one request: the message as JSON, its sequence number and any stream fault.
+
+        Faults of the ``stream_*`` kinds happen after the response has
+        started; a non-streaming request gets the equivalent error at once.
+        """
         self._counter += 1
         n = self._counter
         model = str(params.get("model", ""))
@@ -277,7 +293,9 @@ class FakeAnthropic:
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
         try:
             self._validate(params, beta=beta)
-            await self._maybe_fault(model)
+            fault = self._pick_fault()
+            if fault is not None and fault not in _STREAM_FAULTS:
+                await self._inject(fault, model)
             usage = self._prompt_usage(params)
             self._admit(model, usage.input_tokens + usage.cache_write)
             body = self._respond(params, usage, beta=beta, n=n)
@@ -285,19 +303,37 @@ class FakeAnthropic:
             await self.clock.sleep(self.latency.sample(self.rng, output_tokens))
             if self._buckets is not None:
                 self._buckets[2].take(output_tokens)
+            outcome: Literal["ok", "529", "timeout"] = "ok"
+            if fault is not None:
+                outcome = "timeout" if fault == "stream_timeout" else "529"
             self.events.append(
                 FakeEvent(
                     self.clock.now(),
-                    "ok",
+                    outcome,
                     model,
                     usage.input_tokens + usage.cache_write,
                     output_tokens,
                     self.in_flight,
                 )
             )
-            return body, n
+            if fault is not None and not stream:
+                self._raise_stream_fault(fault, self._response_headers(n))
+            return _Served(body, n, fault)
         finally:
             self.in_flight -= 1
+
+    def _raise_stream_fault(self, fault: FaultKind, headers: httpx2.Headers) -> NoReturn:
+        """Fail a response that has started, the way the SDK reports it."""
+        request = httpx2.Request("POST", _MESSAGES_URL)
+        if fault == "stream_timeout":
+            raise anthropic.APITimeoutError(request=request)
+        # An ``error`` event inside a 200 stream: the SDK raises the base
+        # APIStatusError with the event's error type.
+        body = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+        response = httpx2.Response(200, headers=headers, json=body, request=request)
+        raise anthropic.APIStatusError(
+            f"Error event mid-stream: {body}", response=response, body=body
+        )
 
     def _validate(self, params: dict[str, Any], *, beta: bool) -> None:
         missing = [k for k in ("model", "max_tokens", "messages") if k not in params]
@@ -324,27 +360,28 @@ class FakeAnthropic:
         if "fallbacks" in params and not beta:
             self._raise(400, "invalid_request_error", "fallbacks: needs the beta endpoint")
 
-    async def _maybe_fault(self, model: str) -> None:
-        kind: FaultKind | None = self._scripted.pop(0) if self._scripted else None
-        if kind is None:
-            f = self.faults
-            if f.overload_above is not None and self.in_flight > f.overload_above:
-                kind = "overloaded"
-            else:
-                draw = self.rng.random()
-                odds: tuple[tuple[FaultKind, float], ...] = (
-                    ("rate_limit", f.rate_limit),
-                    ("overloaded", f.overloaded),
-                    ("server_error", f.server_error),
-                    ("timeout", f.timeout),
-                )
-                for candidate, p in odds:
-                    if draw < p:
-                        kind = candidate
-                        break
-                    draw -= p
-        if kind is None:
-            return
+    def _pick_fault(self) -> FaultKind | None:
+        """The fault for the next request: scripted first, then by chance."""
+        if self._scripted:
+            return self._scripted.pop(0)
+        f = self.faults
+        if f.overload_above is not None and self.in_flight > f.overload_above:
+            return "overloaded"
+        draw = self.rng.random()
+        odds: tuple[tuple[FaultKind, float], ...] = (
+            ("rate_limit", f.rate_limit),
+            ("overloaded", f.overloaded),
+            ("server_error", f.server_error),
+            ("timeout", f.timeout),
+        )
+        for kind, p in odds:
+            if draw < p:
+                return kind
+            draw -= p
+        return None
+
+    async def _inject(self, kind: FaultKind, model: str) -> NoReturn:
+        """Fail the request before any response, as the API would."""
         if kind == "timeout":
             await self.clock.sleep(self.faults.timeout_s)
             self.events.append(FakeEvent(self.clock.now(), "timeout", model))
@@ -691,13 +728,63 @@ class FakeRawResponse[T]:
         return self._message
 
 
+@dataclass(frozen=True)
+class _Served:
+    body: dict[str, Any]
+    n: int
+    fault: FaultKind | None
+
+
+@dataclass(frozen=True)
+class _StreamResponse:
+    headers: httpx2.Headers
+
+
+class FakeMessageStream[T]:
+    """What ``async with messages.stream(...) as stream`` yields."""
+
+    def __init__(
+        self, fake: FakeAnthropic, headers: httpx2.Headers, message: T, fault: FaultKind | None
+    ) -> None:
+        self.response = _StreamResponse(headers)
+        self._fake = fake
+        self._message = message
+        self._fault = fault
+
+    async def get_final_message(self) -> T:
+        if self._fault is not None:
+            self._fake._raise_stream_fault(self._fault, self.response.headers)
+        return self._message
+
+
+class FakeMessageStreamManager[T]:
+    """``messages.stream(...)``: the request is sent when the block is entered."""
+
+    def __init__(self, open_stream: Callable[[], Awaitable[FakeMessageStream[T]]]) -> None:
+        self._open = open_stream
+
+    async def __aenter__(self) -> FakeMessageStream[T]:
+        return await self._open()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+        /,
+    ) -> None:
+        return None
+
+
 class _RawMessages:
     def __init__(self, fake: FakeAnthropic) -> None:
         self._fake = fake
 
     async def create(self, **params: Any) -> FakeRawResponse[Message]:
-        body, n = await self._fake._create(params, beta=False)
-        return FakeRawResponse(self._fake._response_headers(n), Message.model_validate(body))
+        served = await self._fake._create(params, beta=False)
+        return FakeRawResponse(
+            self._fake._response_headers(served.n), Message.model_validate(served.body)
+        )
 
 
 class _RawBetaMessages:
@@ -705,11 +792,10 @@ class _RawBetaMessages:
         self._fake = fake
 
     async def create(self, **params: Any) -> FakeRawResponse[BetaMessage]:
-        betas = params.pop("betas", [])
-        if "fallbacks" in params and FALLBACK_BETA not in betas:
-            self._fake._raise(400, "invalid_request_error", "fallbacks: requires the beta header")
-        body, n = await self._fake._create(params, beta=True)
-        return FakeRawResponse(self._fake._response_headers(n), BetaMessage.model_validate(body))
+        served = await self._fake._create(_beta_params(self._fake, params), beta=True)
+        return FakeRawResponse(
+            self._fake._response_headers(served.n), BetaMessage.model_validate(served.body)
+        )
 
 
 class _Batches:
@@ -729,6 +815,7 @@ class _Batches:
 
 class _Messages:
     def __init__(self, fake: FakeAnthropic) -> None:
+        self._fake = fake
         self.with_raw_response = _RawMessages(fake)
         self.batches = _Batches(fake)
 
@@ -736,14 +823,45 @@ class _Messages:
         raw = await self.with_raw_response.create(**params)
         return await raw.parse()
 
+    def stream(self, **params: Any) -> FakeMessageStreamManager[Message]:
+        async def open_stream() -> FakeMessageStream[Message]:
+            self._fake.streamed += 1
+            served = await self._fake._create(params, beta=False, stream=True)
+            message = Message.model_validate(served.body)
+            headers = self._fake._response_headers(served.n)
+            return FakeMessageStream(self._fake, headers, message, served.fault)
+
+        return FakeMessageStreamManager(open_stream)
+
 
 class _BetaMessages:
     def __init__(self, fake: FakeAnthropic) -> None:
+        self._fake = fake
         self.with_raw_response = _RawBetaMessages(fake)
 
     async def create(self, **params: Any) -> BetaMessage:
         raw = await self.with_raw_response.create(**params)
         return await raw.parse()
+
+    def stream(self, **params: Any) -> FakeMessageStreamManager[BetaMessage]:
+        async def open_stream() -> FakeMessageStream[BetaMessage]:
+            self._fake.streamed += 1
+            sent = _beta_params(self._fake, params)
+            served = await self._fake._create(sent, beta=True, stream=True)
+            message = BetaMessage.model_validate(served.body)
+            headers = self._fake._response_headers(served.n)
+            return FakeMessageStream(self._fake, headers, message, served.fault)
+
+        return FakeMessageStreamManager(open_stream)
+
+
+def _beta_params(fake: FakeAnthropic, params: dict[str, Any]) -> dict[str, Any]:
+    """The request body of a beta call: ``betas`` travels as a header, not in the body."""
+    sent = dict(params)
+    betas = sent.pop("betas", [])
+    if "fallbacks" in sent and FALLBACK_BETA not in betas:
+        fake._raise(400, "invalid_request_error", "fallbacks: requires the beta header")
+    return sent
 
 
 class _Beta:

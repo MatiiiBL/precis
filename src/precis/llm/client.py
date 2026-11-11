@@ -7,7 +7,8 @@ against exactly what it calls and nothing else.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, Awaitable, Iterable, Mapping
+from collections.abc import AsyncIterable, Iterable, Mapping
+from types import TracebackType
 from typing import Any, Protocol
 
 import anthropic
@@ -18,21 +19,32 @@ from anthropic.types.messages import MessageBatch, MessageBatchIndividualRespons
 from precis.config import Config
 
 
-class RawResponse[T](Protocol):
-    """``with_raw_response.create``'s result: headers, and the parsed message."""
-
+class ResponseLike(Protocol):
     @property
     def headers(self) -> Mapping[str, str]: ...
 
-    async def parse(self) -> T: ...
+
+class MessageStreamLike[T](Protocol):
+    """An open streamed response: its HTTP headers, and the message once it ends."""
+
+    @property
+    def response(self) -> ResponseLike: ...
+
+    async def get_final_message(self) -> T: ...
 
 
-class RawMessagesLike(Protocol):
-    def create(self, *args: Any, **params: Any) -> Awaitable[RawResponse[Message]]: ...
+class MessageStreamManagerLike[T](Protocol):
+    """``messages.stream(...)``: entering the block sends the request."""
 
+    async def __aenter__(self) -> MessageStreamLike[T]: ...
 
-class RawBetaMessagesLike(Protocol):
-    def create(self, *args: Any, **params: Any) -> Awaitable[RawResponse[BetaMessage]]: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+        /,
+    ) -> object: ...
 
 
 class BatchesLike(Protocol):
@@ -46,16 +58,14 @@ class BatchesLike(Protocol):
 
 
 class MessagesLike(Protocol):
-    @property
-    def with_raw_response(self) -> RawMessagesLike: ...
+    def stream(self, *args: Any, **params: Any) -> MessageStreamManagerLike[Message]: ...
 
     @property
     def batches(self) -> BatchesLike: ...
 
 
 class BetaMessagesLike(Protocol):
-    @property
-    def with_raw_response(self) -> RawBetaMessagesLike: ...
+    def stream(self, *args: Any, **params: Any) -> MessageStreamManagerLike[BetaMessage]: ...
 
 
 class BetaLike(Protocol):
@@ -76,7 +86,9 @@ def make_client(config: Config) -> AsyncAnthropicLike:
 
     The gateway retries every failed attempt itself so that each one goes
     through admission control and shows up in the accounting; SDK retries
-    would happen behind its back. Credentials come from the environment as
-    usual (``ANTHROPIC_API_KEY``, ``ANTHROPIC_AUTH_TOKEN`` or a profile).
+    would happen behind its back. Requests are streamed, so the timeout
+    bounds the wait for each chunk, not the whole generation. Credentials
+    come from the environment as usual (``ANTHROPIC_API_KEY``,
+    ``ANTHROPIC_AUTH_TOKEN`` or a profile).
     """
     return anthropic.AsyncAnthropic(max_retries=0, timeout=config.limits.request_timeout_s)
