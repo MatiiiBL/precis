@@ -1,0 +1,31 @@
+{
+  "papers": 500,
+  "fault_rates": {
+    "429": 0.04,
+    "529": 0.02,
+    "500": 0.02,
+    "timeout": 0.01
+  },
+  "killed_after_s": 4.724175459006801,
+  "finished_at_kill": 201,
+  "running_at_kill": 64,
+  "in_flight_at_kill": 1,
+  "first_run_calls": 1091,
+  "resumed_calls": 1426,
+  "resumed_cached_calls": 46,
+  "resent_requests": 1,
+  "kept_usd": 16.9248902,
+  "cache_savings_usd": 0.2566632,
+  "total_cost_usd": 40.0336982,
+  "retries": 256,
+  "resume_faults": {
+    "429": 66,
+    "529": 27,
+    "500": 38,
+    "timeout": 17
+  },
+  "papers_done": 500,
+  "papers_failed": 0,
+  "papers_lost": 0,
+  "paid_twice": 0
+}
