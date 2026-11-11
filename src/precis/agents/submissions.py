@@ -25,6 +25,18 @@ MAX_TLDR_WORDS = 40
 FINDINGS_RANGE = (2, 6)
 KEYWORDS_RANGE = (3, 8)
 
+INFERRED_PREFIX = "Inferred: "
+"""Starts a limitation the summarizer inferred from the setup rather than read in the paper.
+
+The critic does not check limitations, so the site should mark these as
+unverified; ``is_inferred`` recognizes them.
+"""
+
+
+def is_inferred(limitation: str) -> bool:
+    """Whether a limitation was inferred from the setup rather than stated by the authors."""
+    return limitation.lstrip().lower().startswith(INFERRED_PREFIX.strip().lower())
+
 
 class SubmissionRejected(Exception):
     """A submission failed validation; the message is written for the model."""
@@ -82,7 +94,10 @@ SUMMARY_DESCRIPTIONS = {
     "findings.claim": "One specific sentence, with the paper's own numbers when it gives them.",
     "findings.section_ids": "Ids of the sections or captions that contain the evidence.",
     "contributions": "What the paper adds, one item each.",
-    "limitations": "Limitations stated by the authors or evident from the setup.",
+    "limitations": (
+        "Limitations stated by the authors; ones only evident from the setup start with "
+        '"Inferred: ".'
+    ),
     "methods": "Named techniques, models, algorithms or tools.",
     "datasets": "Datasets, benchmarks or workloads evaluated on.",
     "keywords": "3-8 lowercase topic keywords.",

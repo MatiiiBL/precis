@@ -6,7 +6,7 @@ import pytest
 
 from precis.agents.critic import CHECKS_SCHEMA
 from precis.agents.prompts import load_prompt
-from precis.agents.submissions import SUMMARY_SCHEMA
+from precis.agents.submissions import SUMMARY_SCHEMA, is_inferred
 from precis.agents.tools import READING_TOOLS
 from precis.models import Verdict
 
@@ -86,3 +86,12 @@ def test_summary_style_is_shared_by_every_summarizing_prompt() -> None:
     assert style not in load_prompt("critic").text
     versions = {load_prompt(n).version for n in ("reader", "critic", "reviser", "fulltext")}
     assert len(versions) == 4
+
+
+def test_inferred_limitations_are_labelled() -> None:
+    assert 'start each of those with "Inferred: "' in load_prompt("reader").text
+    limitations = SUMMARY_SCHEMA["properties"]["limitations"]
+    assert '"Inferred: "' in limitations["description"]
+    assert is_inferred("Inferred: evaluated only in simulation.")
+    assert is_inferred("  inferred: one dataset")
+    assert not is_inferred("The authors evaluate only in simulation.")

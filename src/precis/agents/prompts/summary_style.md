@@ -15,7 +15,7 @@ The fields:
 - `approach`: how the paper attacks it, in 2-4 sentences: the key idea first, then the main components.
 - `findings`: 2-6 key results, most important first, each one specific sentence. `section_ids` lists the ids of the sections (or captions, such as "tab2") that contain the evidence, so that a verifier can find it.
 - `contributions`: what the paper adds (a method, system, dataset, benchmark, analysis or proof), one plain item each.
-- `limitations`: limitations the authors state, and ones evident from the setup (for example: simulation only, one dataset, small scale). Leave it empty only if there are none.
+- `limitations`: limitations the authors state. You may add ones that are evident from the setup but not stated (for example: simulation only, one dataset, small scale); start each of those with "Inferred: " so that readers can tell them from the paper's own statements. Leave the list empty only if there are none.
 - `methods`: named techniques, models, algorithms or tools the paper uses or proposes.
 - `datasets`: datasets, benchmarks or workloads it evaluates on, by name.
 - `keywords`: 3-8 lowercase topic keywords a researcher would search for.
