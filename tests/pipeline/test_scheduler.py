@@ -11,7 +11,7 @@ from precis.corpus.load import load_papers
 from precis.llm.fake import FakeReply
 from precis.llm.gateway import request_hash_of
 from precis.models import RevisionResult, Stage, StageRecord, StageStatus
-from precis.pipeline import hashing
+from precis.pipeline import batch_settings, hashing
 
 from .helpers import add_papers, brief_title, config, setup
 
@@ -117,6 +117,16 @@ async def test_stages_can_run_separately() -> None:
     assert stats["stages"]["verify"]["done"] == 2
     assert stats["papers_finished"] == 2
     assert status(s, ids[0], Stage.REVISE) is None
+
+
+def test_batch_settings_admit_every_paper_and_drop_turn_caching() -> None:
+    base = config(pipeline={"max_papers_in_flight": 64})
+    batch = batch_settings(base, 3000)
+    assert batch.pipeline.max_papers_in_flight == 3000
+    assert batch.agents.cache_turns is False
+    assert batch.agents.cache_ttl == base.agents.cache_ttl
+    assert base.agents.cache_turns is True  # the original is untouched
+    assert batch_settings(base, 0).pipeline.max_papers_in_flight == 1
 
 
 async def test_running_no_stages_is_an_error() -> None:

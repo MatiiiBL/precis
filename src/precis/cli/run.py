@@ -19,7 +19,7 @@ from precis.corpus.load import load_papers
 from precis.llm import Gateway, ScaledClock, UnpricedModelError, make_client
 from precis.models import Stage, StageStatus
 from precis.offline import offline_client
-from precis.pipeline import PIPELINE_STAGES, LiveProgress, Pipeline
+from precis.pipeline import PIPELINE_STAGES, LiveProgress, Pipeline, batch_settings
 from precis.store import Store
 
 console = Console()
@@ -114,6 +114,8 @@ def run_command(
         if not paper_ids:
             console.print("No fetched papers in the store; run [bold]precis fetch[/bold] first.")
             raise typer.Exit(1)
+        if mode is Mode.BATCH:
+            config = batch_settings(config, len(paper_ids))
         # Offline, simulated time runs fast so that batch waits (minutes of
         # queueing and polling) take a fraction of a second.
         clock = ScaledClock(OFFLINE_TIME_SCALE) if offline else None

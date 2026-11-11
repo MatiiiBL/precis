@@ -83,6 +83,22 @@ class _Paper:
         return self._index
 
 
+def batch_settings(config: Config, n_papers: int) -> Config:
+    """The settings a batch-mode run of ``n_papers`` papers should use.
+
+    In batch mode each paper has one request outstanding at a time, so a batch
+    holds at most one turn per admitted paper and every agent turn costs a
+    whole batch round trip: all papers are admitted at once, so that each
+    round carries every paper's next turn. Turns are also minutes apart, past
+    the life of a 5-minute cache entry, so the automatic breakpoint on each
+    turn would pay the cache-write premium for nothing; only the system
+    prompt and tools, shared by every paper, stay cached.
+    """
+    pipeline = config.pipeline.model_copy(update={"max_papers_in_flight": max(1, n_papers)})
+    agents = config.agents.model_copy(update={"cache_turns": False})
+    return config.model_copy(update={"pipeline": pipeline, "agents": agents})
+
+
 class Pipeline:
     """Runs the per-paper stages over many papers, resumably."""
 

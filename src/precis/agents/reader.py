@@ -52,6 +52,7 @@ async def run_reader(
         submit=summary_tool(view),
         finish_hint=READER_FINISH,
         cache_ttl=config.cache_ttl,
+        cache_turns=config.cache_turns,
     )
     result = await run_agent(gw, spec, tools, config.reader, paper_id=meta.id)
     summary = PaperSummary(paper_id=meta.id, revision=0, **result.value.model_dump())

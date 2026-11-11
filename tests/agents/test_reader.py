@@ -96,6 +96,14 @@ async def test_request_shape() -> None:
     assert "<outline>\nBody:" in brief
 
 
+async def test_turn_caching_can_be_switched_off() -> None:
+    gw = ScriptedGateway([tool_turn(SUBMIT)])
+    await read(gw, cache_turns=False)
+    params = gw.requests[0]
+    assert "cache_control" not in params
+    assert params["system"][0]["cache_control"] == {"type": "ephemeral"}
+
+
 async def test_one_hour_cache_lifetime() -> None:
     gw = ScriptedGateway([tool_turn(SUBMIT)])
     await read(gw, cache_ttl="1h")

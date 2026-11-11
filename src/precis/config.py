@@ -63,6 +63,11 @@ class AgentsConfig(Record):
         description="Prompt-cache lifetime of agent requests; 1h writes cost 2x instead of 1.25x "
         "but survive longer gaps between turns.",
     )
+    cache_turns: bool = Field(
+        default=True,
+        description="Cache each turn of a tool loop for the next one (automatic caching). Off in "
+        "batch mode, where turns are minutes apart; the system prompt is cached either way.",
+    )
 
     def roles(self) -> dict[str, AgentConfig]:
         """Every model role, by name, so checks over all roles cannot miss a new one."""

@@ -61,6 +61,8 @@ class AgentSpec[T]:
     finish_hint: str
     """What to do when the budget runs out, e.g. "Call submit_summary with ..."."""
     cache_ttl: CacheTTL
+    cache_turns: bool
+    """Automatic caching of each turn for the next (``AgentsConfig.cache_turns``)."""
 
 
 async def run_agent[T](
@@ -100,7 +102,8 @@ async def run_agent[T](
 
         params = base_params(config, spec.system, messages, ttl=spec.cache_ttl)
         params["tools"] = definitions
-        params["cache_control"] = cache_control(spec.cache_ttl)
+        if spec.cache_turns:
+            params["cache_control"] = cache_control(spec.cache_ttl)
         reply = await send(gw, params, stage=spec.stage, paper_id=paper_id, trace=trace)
 
         if reply.stop_reason not in ("tool_use", "end_turn", "stop_sequence", "pause_turn"):

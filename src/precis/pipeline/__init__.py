@@ -5,7 +5,7 @@ Stage outputs follow the table in docs/design.md, section 1;
 """
 
 from precis.pipeline.progress import LiveProgress, render_progress
-from precis.pipeline.scheduler import Pipeline
+from precis.pipeline.scheduler import Pipeline, batch_settings
 from precis.pipeline.stats import PIPELINE_STAGES, RunStats
 
 __all__ = [
@@ -13,5 +13,6 @@ __all__ = [
     "LiveProgress",
     "Pipeline",
     "RunStats",
+    "batch_settings",
     "render_progress",
 ]

@@ -235,6 +235,7 @@ async def run_critic(
         submit=verification_tool(view, summary),
         finish_hint=CRITIC_FINISH,
         cache_ttl=config.cache_ttl,
+        cache_turns=config.cache_turns,
     )
     result = await run_agent(gw, spec, tools, config.critic, paper_id=meta.id)
     checks, downgraded = check_quotes(view, result.value.checks)
