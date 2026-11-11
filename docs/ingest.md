@@ -156,7 +156,11 @@ outside it (arXiv's page chrome, table of contents, license box).
   out of the section text. Algorithm floats count as figures.
 - **Dropped:** title, authors, abstract, keywords, CCS classification,
   front-matter notes, acknowledgements (by class or by title),
-  bibliography, and unconverted macro names (`ltx_ERROR`).
+  bibliography, and unconverted macro names (`ltx_ERROR`). An
+  acknowledgment written as a bold lead-in instead of a section
+  ("**Acknowledgment** This work is sponsored by ... Grant No. CCF2403134")
+  is cut from the lead-in to the end of its paragraph, in both parsers;
+  left in, its grant numbers read like results of the paper.
 - A paper without any `\section` is cut into parts (see below).
 
 The page is decoded as UTF-8 regardless of its declarations; without that,
@@ -172,28 +176,53 @@ IEEE and ACM two-column papers:
 1. **Page furniture.** A line that recurs (digits ignored) in the top or
    bottom two lines of at least 30% of the pages is a running header or
    footer; a bare number there is a page number. ACM permission blocks,
-   IEEE copyright lines and DOI lines are dropped.
+   IEEE copyright lines and DOI lines are dropped. So is a **table of
+   contents**: a run of entries ending in a page number with no running
+   text between them, at least three of them numbered or with dot leaders
+   and titled with real words (so table rows such as
+   `3.1 56 X 56 X 128 3 X 3 X 128 X 256` never qualify).
 2. **References.** Everything from the last `References`/`Bibliography`
-   heading is dropped, except an appendix after it: either a line that says
+   heading (with or without a trailing period or colon) is dropped, except
+   an appendix after it: either a line that says
    "Appendix", or lettered headings (`A Allocation Policies`, `A.1 ...`)
    counting from A after the last numbered reference. Lines that look like
-   author lists (initials, years, "et al") are never appendix headings.
+   author lists (initials, years, "et al") are never appendix headings, and
+   neither are sentences that start with the article ("A Hopfield neural
+   network is ..."): a lettered heading is at most 90 characters and does
+   not run on into a lowercase line.
 3. **Headings** are found by pattern: `2 Background`, `2.3 Title`,
    `II. BACKGROUND` (with small caps repaired: `I NTRODUCTION`),
    `A. Subsection`, IEEE run-ins `1) Title: text`, ACM run-ins
    `4.1.1 Memory Requirements. Working set ...` (title split from the
-   text), wrapped titles, and a number alone on its line above its title.
+   text), and a number alone on its line above its title. A title that
+   wrapped is joined with its second line when it broke inside a word, on
+   a comma or connector ("... Architecture with" / "Blackwell Instances"),
+   or when a Title Case heading that filled its line is followed by a short
+   Title Case fragment and then running text ("... Signal Processing and
+   Deep" / "Learning"); a short heading followed by a capitalized line is
+   left alone, since that line is a sub-heading ("FFT Engine" / "Theory of
+   Operation"). Titles may be up to 120 characters.
    Patterns alone match figure labels, axis ticks and numbered lists, so
    the parser then keeps the **best consistently numbered chain**: a small
    dynamic program over the candidates picks the in-order sequence 1, 2, 3,
    ... with the most weight (Title Case and ALL CAPS titles weigh more than
-   sentences, so "1. We propose ..." loses to "1 Introduction"; one missed
-   number is tolerated at half credit), then does the same for each
-   section's subsections. Papers without numbered headings fall back to
-   standalone all-caps lines and common section names followed by prose.
+   sentences, so "1. We propose ..." loses to "1 Introduction"; a candidate
+   whose next line continues it in lowercase, like "... shown in Table" /
+   "3. ICE models ..., validated across" / "multiple platforms", weighs
+   half; one missed number is tolerated at half credit), then does the same
+   for each section's subsections. Papers without numbered headings fall
+   back to standalone all-caps lines and common section names followed by
+   prose.
+   **Lopsided outlines are distrusted.** If fewer than 6 sections come out
+   and one holds over 80% of a paper of at least 3,000 tokens, the headings
+   were not the paper's (a table of contents, list items) and most were
+   missed. The parser retries with unnumbered headings and, if that is no
+   better, cuts the paper into parts (see below): no outline beats a wrong
+   one, since the reader trusts the titles it is shown.
 4. **Front matter** (title, authors, abstract, keywords) is everything
    before the first heading and is dropped; Abstract, Acknowledgments and
-   Keywords headings anywhere cut their text out.
+   Keywords headings anywhere cut their text out, and so does a run-in
+   acknowledgment (see the HTML parser).
 5. **Captions** (`Fig. 3: ...`, `TABLE II` + title line) are moved into
    `Caption` records. Without font information a caption's end is a guess,
    so it stops at the first sentence end or short line: a long caption's
@@ -308,10 +337,16 @@ Each paper is recorded as it finishes: `running`, then `done` with a
 summary in `StageRecord.output` (`version`, `source_format`, `n_tokens`,
 `n_sections`, `n_captions`, `fallback_reason`) or `failed` with the reason.
 The document is written before the stage, so a crash between the two
-leaves `running`, which `Store.reset_running` turns back into `pending`.
+leaves `running`. Every fetch command starts with
+`Store.reset_running(stages=[FETCH])`, which turns such rows back into
+`pending` and says how many; it touches only `fetch` rows, so a `precis
+run` working on the same store keeps its own.
 Ctrl-C puts in-flight papers back to `pending` and exits with code 130; a
 search that fails exits with code 1; individual paper failures do not
-change the exit code (withdrawn papers fail on every run). `--metadata-only`
+change the exit code (withdrawn papers fail on every run). Any exception
+while fetching, parsing or storing one paper, expected or not, becomes that
+paper's `failed` record with the error text; it never ends the command.
+`--metadata-only`
 marks new papers `pending`. Four workers run at once so parsing overlaps
 downloading; the shared limiter keeps the request rate at one per 3 s.
 Every invocation is recorded with `Store.start_run`/`finish_run` and its
@@ -329,6 +364,38 @@ Configuration (`[fetch]` in `precis.toml`):
 | `page_size` | 200 | results per API request |
 | `max_attempts` | 5 | per request, and per empty page |
 | `timeout_s` | 60 | per request |
+
+## After the full run: parser version 2
+
+A review of the first papers of the full cs.AR run found four parsing
+faults, all fixed in parser version 2, and the run itself hit one crash:
+
+| Paper | Fault | Now |
+|---|---|---|
+| 2507.07223 (PDF) | the table of contents became the outline: 4 sections titled with page numbers, "Conclusion 51" holding 99.5% of the text | the 22 sections and subsections of the paper |
+| 2507.12904 (PDF) | "Applications of CGRAs in Signal Processing and Deep" | "... and Deep Learning" |
+| 2508.13249 (PDF) | "References." went unrecognized and numbered references became sections 7-12 | 6 sections, no references |
+| 2507.10912 (HTML) | a bold "Acknowledgment" lead-in kept, grant numbers included | removed |
+| 2512.14151 (PDF) | pypdf returned math letters as lone UTF-16 surrogates (`\ud835`); the store could not encode the document, and the error ended the whole fetch after 820 papers | surrogate pairs are recombined and lone halves dropped for all text; any error with one paper is recorded as that paper's failure and the run goes on |
+
+Bumping the version re-parses every fetched paper from its raw file the
+next time a fetch command runs; nothing is downloaded again (missing HTML
+is remembered, and cached HTML that was rejected falls back to the cached
+PDF). When version 2 was made, the running store had 721 papers fetched
+(648 HTML, 73 PDF). Re-parsing all of them took about a minute and
+changed 23 documents; the other 698 came out identical:
+
+- 14 PDF outlines: the table of contents above; wrapped titles completed in
+  six papers; a missed subsection found (2509.04173); the reference list
+  above; three lopsided outlines caught by the safety net, one rebuilt
+  from unnumbered headings (2511.05502) and two cut into parts (2508.00295,
+  a letter whose only heading is "Introduction", and 2510.26492); and two
+  papers whose outlines were already made of numbered list items gain one
+  more such item, now that titles may be longer (2510.07116, 2511.11917);
+- 3 PDF texts: two run-in acknowledgments removed (in the two-page
+  2508.17562 together with the reference list that followed it in the same
+  paragraph), and one reference list under "References:" dropped;
+- 6 HTML texts: a run-in acknowledgment removed, nothing else.
 
 ## Tests
 

@@ -7,6 +7,7 @@ import pytest
 
 from precis.config import FetchConfig
 from precis.models import PaperMeta, Stage, StageRecord, StageStatus
+from precis.sources import runner as runner_module
 from precis.sources.fulltext import FullText
 from precis.sources.http import FetchError
 from precis.sources.runner import FetchRunner, Outcome, fetch_config_hash
@@ -142,6 +143,14 @@ async def test_a_new_version_or_new_settings_fetch_again(store: Store) -> None:
     assert not _runner(store, config_hash="other").is_done("2507.00001", 1)
     await runner.fetch_arxiv(fetcher, [_meta("2507.00001", version=2)])
     assert fetcher.calls == ["2507.00001", "2507.00001"]
+
+
+def test_a_new_parser_version_means_papers_are_fetched_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = fetch_config_hash(FetchConfig())
+    monkeypatch.setattr(runner_module, "PARSER_VERSION", runner_module.PARSER_VERSION + 1)
+    assert fetch_config_hash(FetchConfig()) != before
 
 
 async def test_an_unexpected_error_fails_one_paper_not_the_run(store: Store) -> None:

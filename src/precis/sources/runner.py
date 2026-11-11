@@ -36,8 +36,11 @@ from precis.util import canonical_json, sha256_hex
 logger = logging.getLogger(__name__)
 
 # Part of every fetch stage's config hash: bump it when a parser change
-# should re-parse papers that were already fetched.
-PARSER_VERSION = 1
+# should re-parse papers that were already fetched (from the raw files on
+# disk; nothing is downloaded again).
+#   2: tables of contents, lopsided outlines, wrapped headings, "References."
+#      headings and run-in acknowledgments (docs/ingest.md, "After the full run").
+PARSER_VERSION = 2
 WORKERS = 4
 
 OutcomeStatus = Literal["html", "pdf", "skipped", "failed"]
