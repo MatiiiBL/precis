@@ -49,9 +49,10 @@ Document size, in `util.estimate_tokens` tokens (characters / 4), over the
 |---:|---:|---:|---:|---:|---:|---:|---:|
 | 2,894 | 4,783 | 6,093 | **8,283** | 12,763 | 16,216 | 26,506 | 9,705 |
 
-21 of 49 documents are over 10k tokens and 2 over 20k, so even the longest
-paper fits in the reader's default 80k-token budget with room for the
-conversation; nothing is truncated anywhere in ingest. A document has a
+21 of 49 documents are over 10k tokens and 2 over 20k; nothing is
+truncated anywhere in ingest. The reader pages through a document instead of
+loading it whole; how its token budget counts the conversation is in
+[agents.md](agents.md). A document has a
 median of 21 sections (max 56) and 11 captions (max 53); a section is a
 median of 317 tokens (p90 955, max 2,909), which is the unit `read_section`
 pages through. 10 of 49 papers have appendices.

@@ -104,6 +104,7 @@ def message(
     stop_reason: str = "end_turn",
     *,
     usage: tuple[int, int] = (100, 20),
+    cache_read: int = 0,
     stop_details: dict[str, Any] | None = None,
 ) -> Message:
     return Message.model_validate(
@@ -116,7 +117,11 @@ def message(
             "stop_reason": stop_reason,
             "stop_sequence": None,
             "stop_details": stop_details,
-            "usage": {"input_tokens": usage[0], "output_tokens": usage[1]},
+            "usage": {
+                "input_tokens": usage[0],
+                "output_tokens": usage[1],
+                "cache_read_input_tokens": cache_read,
+            },
         }
     )
 
@@ -129,8 +134,10 @@ def call(name: str, tool_input: dict[str, Any], call_id: str = "toolu_1") -> dic
     return {"type": "tool_use", "id": call_id, "name": name, "input": tool_input}
 
 
-def tool_turn(*calls: dict[str, Any], usage: tuple[int, int] = (100, 20)) -> Message:
-    return message([thinking(), *calls], "tool_use", usage=usage)
+def tool_turn(
+    *calls: dict[str, Any], usage: tuple[int, int] = (100, 20), cache_read: int = 0
+) -> Message:
+    return message([thinking(), *calls], "tool_use", usage=usage, cache_read=cache_read)
 
 
 def text_turn(text: str, stop_reason: str = "end_turn") -> Message:

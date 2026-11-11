@@ -203,6 +203,23 @@ async def test_token_budget_triggers_the_notice() -> None:
     assert "about 950 of 1,000 tokens" in notice["content"]
 
 
+async def test_cache_reads_count_at_a_tenth_of_the_budget() -> None:
+    reread = tool_turn(call("search_paper", {"query": "misses"}), usage=(100, 50), cache_read=5000)
+    gw = ScriptedGateway([reread, tool_turn(SUBMIT)])
+    result = await read(gw, reader=AgentConfig(token_budget=1000))
+    # 100 + 50 + 5,000 / 10 = 650 budget tokens after turn one: below the 80% notice.
+    assert all(m["role"] != "system" for m in gw.requests[1]["messages"])
+    assert result.trace.budget_tokens == 650 + 100 + 20  # plus the submitting turn
+    assert result.trace.tokens == 5150 + 100 + 20
+
+
+async def test_the_brief_states_the_budget_up_front() -> None:
+    gw = ScriptedGateway([tool_turn(SUBMIT)])
+    await read(gw, reader=AgentConfig(max_turns=7, token_budget=50_000))
+    brief = gw.requests[0]["messages"][0]["content"]
+    assert "Budget: at most 7 turns and about 50,000 tokens" in brief
+
+
 async def test_reading_stops_when_the_budget_is_spent_and_the_run_fails_after_grace() -> None:
     gw = ScriptedGateway([reading_turn(i) for i in range(1, 5)])
     with pytest.raises(AgentError, match="no valid submit_summary call within the budget"):

@@ -86,7 +86,7 @@ async def run_agent[T](
         if exhausted_after is not None and trace.requests >= exhausted_after + GRACE_TURNS:
             raise AgentError(
                 f"no valid {spec.submit.name} call within the budget ({trace.requests} requests, "
-                f"{trace.tokens:,} tokens)"
+                f"{trace.budget_tokens:,} budget tokens)"
             )
         if (
             trace.budget_notices == 0
@@ -147,21 +147,31 @@ def _use_tool(
     return tools.run(call.name, call.input)
 
 
+def budget_line(config: AgentConfig) -> str:
+    """The budget, stated in the first message so the model can plan its reading."""
+    return (
+        f"Budget: at most {config.max_turns} turns and about {config.token_budget:,} tokens "
+        "(input and output; each turn re-reads the conversation from a cache, which counts "
+        "at a tenth). Open what you need rather than everything."
+    )
+
+
 def _exhausted(trace: AgentTrace, config: AgentConfig) -> bool:
-    return trace.requests >= config.max_turns or trace.tokens >= config.token_budget
+    return trace.requests >= config.max_turns or trace.budget_tokens >= config.token_budget
 
 
 def _nearly_spent(trace: AgentTrace, config: AgentConfig) -> bool:
     return (
         config.max_turns - trace.requests <= NOTICE_TURNS_LEFT
-        or trace.tokens >= NOTICE_FRACTION * config.token_budget
+        or trace.budget_tokens >= NOTICE_FRACTION * config.token_budget
     )
 
 
 def _budget_notice(trace: AgentTrace, config: AgentConfig, spec: AgentSpec[Any]) -> str:
     return (
         f"Budget notice: you have used {trace.requests} of {config.max_turns} turns and about "
-        f"{trace.tokens:,} of {config.token_budget:,} tokens. Stop reading. {spec.finish_hint}"
+        f"{trace.budget_tokens:,} of {config.token_budget:,} tokens. Stop reading. "
+        f"{spec.finish_hint}"
     )
 
 

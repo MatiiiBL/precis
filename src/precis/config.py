@@ -32,7 +32,8 @@ class AgentConfig(Record):
     token_budget: int = Field(
         default=80000,
         gt=0,
-        description="Input + output tokens one agent run may spend before it is told to finish.",
+        description="Tokens one agent run may spend before it is told to finish: input, cache "
+        "writes and output, plus cache reads at a tenth.",
     )
 
 

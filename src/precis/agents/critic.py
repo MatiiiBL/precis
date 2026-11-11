@@ -14,14 +14,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from precis.agents.loop import AgentSpec, run_agent
+from precis.agents.loop import AgentSpec, budget_line, run_agent
 from precis.agents.paper import PaperView
 from precis.agents.prompts import load_prompt
 from precis.agents.schema import strict_schema
 from precis.agents.submissions import SubmitTool, describe_validation_error, rejection
 from precis.agents.tools import PassageIndex, ReadingTools, paper_index
 from precis.agents.trace import AgentResult
-from precis.config import AgentsConfig
+from precis.config import AgentConfig, AgentsConfig
 from precis.llm import ModelGateway
 from precis.models import (
     ClaimCheck,
@@ -77,12 +77,13 @@ def render_claims(summary: PaperSummary) -> str:
     return "\n".join(lines)
 
 
-def critic_brief(view: PaperView, summary: PaperSummary) -> str:
+def critic_brief(view: PaperView, summary: PaperSummary, *, budget: AgentConfig) -> str:
     targets = ", ".join(t for t, _ in claim_targets(summary))
     return (
         f"<paper>\n{view.header(include_abstract=False)}\n</paper>\n\n"
         f"<outline>\n{view.outline()}\n</outline>\n\n"
         f"<claims>\n{render_claims(summary)}\n</claims>\n\n"
+        f"{budget_line(budget)}\n\n"
         f"Check every claim against the paper, then call submit_verification with one check "
         f"for each of: {targets}."
     )
@@ -175,7 +176,7 @@ async def run_critic(
     spec = AgentSpec(
         stage=stage,
         system=load_prompt("critic"),
-        brief=critic_brief(view, summary),
+        brief=critic_brief(view, summary, budget=config.critic),
         submit=verification_tool(view, summary),
         finish_hint=CRITIC_FINISH,
         cache_ttl=config.cache_ttl,

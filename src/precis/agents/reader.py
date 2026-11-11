@@ -8,13 +8,13 @@ proofs and appendices.
 
 from __future__ import annotations
 
-from precis.agents.loop import AgentSpec, run_agent
+from precis.agents.loop import AgentSpec, budget_line, run_agent
 from precis.agents.paper import PaperView
 from precis.agents.prompts import load_prompt
 from precis.agents.submissions import summary_tool
 from precis.agents.tools import PassageIndex, ReadingTools, paper_index
 from precis.agents.trace import AgentResult
-from precis.config import AgentsConfig
+from precis.config import AgentConfig, AgentsConfig
 from precis.llm import ModelGateway
 from precis.models import Document, PaperMeta, PaperSummary
 
@@ -24,11 +24,12 @@ READER_FINISH = (
 )
 
 
-def reader_brief(view: PaperView, *, include_abstract: bool) -> str:
-    """The reader's first message: who wrote what, and where everything is."""
+def reader_brief(view: PaperView, *, include_abstract: bool, budget: AgentConfig) -> str:
+    """The reader's first message: who wrote what, where everything is, and the budget."""
     return (
         f"<paper>\n{view.header(include_abstract=include_abstract)}\n</paper>\n\n"
         f"<outline>\n{view.outline()}\n</outline>\n\n"
+        f"{budget_line(budget)}\n\n"
         "Read the parts of this paper you need with the tools, then call submit_summary."
     )
 
@@ -47,7 +48,7 @@ async def run_reader(
     spec = AgentSpec(
         stage="read",
         system=load_prompt("reader"),
-        brief=reader_brief(view, include_abstract=config.include_abstract),
+        brief=reader_brief(view, include_abstract=config.include_abstract, budget=config.reader),
         submit=summary_tool(view),
         finish_hint=READER_FINISH,
         cache_ttl=config.cache_ttl,

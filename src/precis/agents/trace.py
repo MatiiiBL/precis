@@ -7,14 +7,23 @@ from dataclasses import dataclass, field
 
 from precis.llm import Reply
 
+CACHE_READ_WEIGHT = 0.1
+"""Weight of a cache-read token in the token budget.
+
+Each turn of a tool loop re-reads the whole conversation from the cache, so
+counting cache reads at full weight would exhaust the budget on a long
+paper after reading about half of it, although those reads cost a twentieth
+of the input price on Opus 5.5.
+"""
+
 
 @dataclass
 class AgentTrace:
     """What one agent run cost and did; the scheduler aggregates these per run.
 
-    Token counts add up every request of the run, including cache reads, so a
-    later turn that re-reads the conversation from cache counts it again: this
-    is the quantity ``AgentConfig.token_budget`` limits.
+    Token counts add up every request of the run. ``tokens`` is everything,
+    cache reads included; ``budget_tokens`` is what ``AgentConfig.token_budget``
+    limits, with cache reads at ``CACHE_READ_WEIGHT``.
     """
 
     requests: int = 0
@@ -39,6 +48,16 @@ class AgentTrace:
             + self.output_tokens
             + self.cache_creation_input_tokens
             + self.cache_read_input_tokens
+        )
+
+    @property
+    def budget_tokens(self) -> int:
+        """Input, cache writes and output, plus cache reads at a tenth."""
+        return round(
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_creation_input_tokens
+            + CACHE_READ_WEIGHT * self.cache_read_input_tokens
         )
 
     def add(self, reply: Reply) -> None:

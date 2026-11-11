@@ -7,13 +7,13 @@ can be wrong too, and the rewritten summary is verified again afterwards.
 
 from __future__ import annotations
 
-from precis.agents.loop import AgentSpec, run_agent
+from precis.agents.loop import AgentSpec, budget_line, run_agent
 from precis.agents.paper import PaperView, paper_text
 from precis.agents.prompts import load_prompt
 from precis.agents.submissions import summary_tool
 from precis.agents.tools import PassageIndex, ReadingTools, paper_index
 from precis.agents.trace import AgentResult
-from precis.config import AgentsConfig
+from precis.config import AgentConfig, AgentsConfig
 from precis.llm import ModelGateway
 from precis.models import (
     ClaimCheck,
@@ -39,7 +39,9 @@ def _render_check(check: ClaimCheck) -> str:
     return "\n".join(lines)
 
 
-def reviser_brief(view: PaperView, summary: PaperSummary, verification: Verification) -> str:
+def reviser_brief(
+    view: PaperView, summary: PaperSummary, verification: Verification, *, budget: AgentConfig
+) -> str:
     draft = SummaryDraft.model_validate(summary.model_dump(include=set(SummaryDraft.model_fields)))
     failed = [c for c in verification.checks if c.verdict is not Verdict.SUPPORTED]
     passed = [c.target for c in verification.checks if c.verdict is Verdict.SUPPORTED]
@@ -49,6 +51,7 @@ def reviser_brief(view: PaperView, summary: PaperSummary, verification: Verifica
         f"<outline>\n{view.outline()}\n</outline>\n\n"
         f"<summary>\n{draft.model_dump_json(indent=2)}\n</summary>\n\n"
         f"<failed_checks>\n{checks}\n</failed_checks>\n\n"
+        f"{budget_line(budget)}\n\n"
         f"Claims that passed: {', '.join(passed) or 'none'}. "
         "Findings are numbered from 0 in the order of the summary. Correct the failed claims "
         "from the paper, then call submit_summary with the complete corrected summary."
@@ -71,7 +74,7 @@ async def run_reviser(
     spec = AgentSpec(
         stage="revise",
         system=load_prompt("reviser"),
-        brief=reviser_brief(view, summary, verification),
+        brief=reviser_brief(view, summary, verification, budget=config.reviser),
         submit=summary_tool(view),
         finish_hint=REVISER_FINISH,
         cache_ttl=config.cache_ttl,
