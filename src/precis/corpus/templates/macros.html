@@ -1,0 +1,26 @@
+{% macro verdict_badge(check) -%}
+{% if check %}<span class="badge v-{{ check.verdict.value }}" title="{{ check.note }}">{{ verdict_labels[check.verdict.value] }}</span>{% else %}<span class="badge v-none">Not checked</span>{% endif %}
+{%- endmacro %}
+
+{% macro chips(items, cls="chip") -%}
+{% if items %}<ul class="chips">{% for item in items %}<li class="{{ cls }}">{{ item }}</li>{% endfor %}</ul>{% endif %}
+{%- endmacro %}
+
+{% macro verdict_bar(counts, label) -%}
+<div class="vbar-row">
+  <span class="vbar-label">{{ label }}</span>
+  <div class="vbar" role="img" aria-label="{{ label }}: {% for v, rate in counts.rates().items() %}{{ verdict_labels[v] }} {{ rate | percent }}{% if not loop.last %}, {% endif %}{% endfor %}">
+    {% for v, rate in counts.rates().items() %}{% if rate > 0 %}<span class="vbar-seg v-{{ v }}" style="width: {{ '%.2f' % (100 * rate) }}%" title="{{ verdict_labels[v] }}: {{ rate | percent }}"></span>{% endif %}{% endfor %}
+  </div>
+  <span class="vbar-value">{{ counts.rates()['supported'] | percent }} supported</span>
+</div>
+{%- endmacro %}
+
+{% macro paper_row(paper, root) -%}
+{% set counts = faith_of(paper) %}
+<li class="paper-row">
+  <a class="paper-title" href="{{ root }}papers/{{ page_name(paper.id) }}.html">{{ paper.meta.title }}</a>
+  <div class="paper-meta">{{ paper.meta.published.isoformat() }} · {{ paper.meta.authors[0] if paper.meta.authors else "" }}{% if paper.meta.authors | length > 1 %} et al.{% endif %}{% if counts.total %} · <span class="mini v-{{ 'supported' if counts.supported == counts.total else 'partial' }}">{{ counts.supported }}/{{ counts.total }} claims supported</span>{% endif %}</div>
+  <p class="paper-tldr">{{ paper.summary.tldr }}</p>
+</li>
+{%- endmacro %}

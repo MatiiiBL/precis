@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% from "macros.html" import chips, verdict_badge %}
+{% block title %}{{ paper.meta.title }} · {{ site_title }}{% endblock %}
+{% macro claim(item) -%}
+<div class="claim">
+  <div class="claim-head">{{ verdict_badge(item.check) }}<span class="claim-text">{{ item.text }}</span></div>
+  {% if item.check %}
+  <details class="evidence">
+    <summary>Evidence{% if item.check.section_id %} (section {{ item.check.section_id }}){% endif %}</summary>
+    {% if item.check.evidence %}<blockquote>{{ item.check.evidence }}</blockquote>{% else %}<p class="muted">No supporting passage found.</p>{% endif %}
+    <p class="muted">{{ item.check.note }}</p>
+  </details>
+  {% endif %}
+</div>
+{%- endmacro %}
+{% block content %}
+<nav class="crumbs"><a href="{{ root }}index.html">Overview</a>{% if topic %} › <a href="{{ root }}topics/{{ topic.id }}.html">{{ topic.label }}</a>{% endif %}</nav>
+<article class="paper">
+  <h1>{{ paper.meta.title }}</h1>
+  <p class="byline">{{ paper.meta.authors | join(", ") }}</p>
+  <p class="muted">{{ paper.meta.id }} · published {{ paper.meta.published.isoformat() }} · {{ paper.meta.categories | join(", ") }}</p>
+  {% if links %}
+  <p class="links"><a href="{{ links.abs }}">arXiv</a><a href="{{ links.pdf }}">PDF</a><a href="{{ links.html }}">HTML</a></p>
+  {% endif %}
+
+  {% if paper.revised %}
+  {% set failed = counts.revised_before.unsupported + counts.revised_before.contradicted %}
+  <p class="note">This summary was rewritten after verification: {{ failed }} claim{{ " was" if failed == 1 else "s were" }} not supported by the paper in the first draft.</p>
+  {% endif %}
+
+  <section>
+    <h2>TL;DR</h2>
+    {{ claim(tldr) }}
+  </section>
+
+  <section class="prose">
+    <h2>Problem</h2>
+    <p>{{ paper.summary.problem }}</p>
+    <h2>Approach</h2>
+    <p>{{ paper.summary.approach }}</p>
+  </section>
+
+  <section>
+    <h2>Findings</h2>
+    {% if counts.final.total %}<p class="muted">{{ counts.final.supported }} of {{ counts.final.total }} claims supported by the paper.</p>{% endif %}
+    {% for item in findings %}{{ claim(item) }}{% endfor %}
+  </section>
+
+  <section class="prose">
+    {% if paper.summary.contributions %}
+    <h2>Contributions</h2>
+    <ul>{% for item in paper.summary.contributions %}<li>{{ item }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if paper.summary.limitations %}
+    <h2>Limitations</h2>
+    <ul>{% for item in paper.summary.limitations %}<li>{{ item }}</li>{% endfor %}</ul>
+    {% endif %}
+  </section>
+
+  <section class="facets">
+    {% if paper.summary.methods %}<div><h3>Methods</h3>{{ chips(paper.summary.methods) }}</div>{% endif %}
+    {% if paper.summary.datasets %}<div><h3>Datasets</h3>{{ chips(paper.summary.datasets) }}</div>{% endif %}
+    {% if paper.summary.keywords %}<div><h3>Keywords</h3>{{ chips(paper.summary.keywords, "chip tag") }}</div>{% endif %}
+  </section>
+</article>
+{% endblock %}

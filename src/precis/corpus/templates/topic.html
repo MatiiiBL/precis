@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% from "macros.html" import chips, paper_row %}
+{% block title %}{{ topic.label }} · {{ site_title }}{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="{{ root }}index.html">Overview</a> › Topic {{ topic.id }}</nav>
+<h1>{{ topic.label }}</h1>
+<p class="lede">{{ topic.description }}</p>
+<p class="muted">{{ papers | length }} papers</p>
+{{ chips(topic.keywords) }}
+
+{% if synthesis %}
+<section class="prose">
+  <h2>Overview</h2>
+  {{ cite(synthesis.overview) | markdown }}
+  {% if synthesis.trends %}
+  <h3>Trends</h3>
+  <ul>{% for item in synthesis.trends %}<li>{{ cite(item) | inline }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if synthesis.open_problems %}
+  <h3>Open problems</h3>
+  <ul>{% for item in synthesis.open_problems %}<li>{{ cite(item) | inline }}</li>{% endfor %}</ul>
+  {% endif %}
+</section>
+{% if key_papers %}
+<section>
+  <h2>Key papers</h2>
+  <ul class="paper-list">{% for paper in key_papers %}{{ paper_row(paper, root) }}{% endfor %}</ul>
+</section>
+{% endif %}
+{% endif %}
+
+<section>
+  <h2>All papers</h2>
+  <p class="muted">Most representative first.</p>
+  <ul class="paper-list">{% for paper in papers %}{{ paper_row(paper, root) }}{% endfor %}</ul>
+</section>
+{% endblock %}

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Search · {{ site_title }}{% endblock %}
+{% block content %}
+<h1>Search</h1>
+<input id="q" class="search-big" type="search" placeholder="Title, topic, keyword or author" aria-label="Search papers" autofocus>
+<p id="status" class="muted" aria-live="polite"></p>
+<ul id="results" class="paper-list"></ul>
+<noscript><p class="muted">Search needs JavaScript. Browse the topics from the <a href="index.html">overview</a>.</p></noscript>
+{% endblock %}
+{% block scripts %}
+<script src="assets/search-index.js"></script>
+<script>
+(function () {
+  "use strict";
+  var input = document.getElementById("q");
+  var results = document.getElementById("results");
+  var status = document.getElementById("status");
+  var docs = (window.PRECIS_INDEX || []).map(function (d) {
+    return {d: d, title: d.t.toLowerCase(), body: [d.s, d.k, d.a, d.c, d.id].join(" ").toLowerCase()};
+  });
+  var LIMIT = 50;
+
+  function search(query) {
+    var terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return [];
+    var hits = [];
+    for (var i = 0; i < docs.length; i++) {
+      var doc = docs[i], score = 0;
+      for (var j = 0; j < terms.length; j++) {
+        if (doc.title.indexOf(terms[j]) >= 0) score += 3;
+        else if (doc.body.indexOf(terms[j]) >= 0) score += 1;
+        else { score = 0; break; }
+      }
+      if (score) hits.push({score: score, d: doc.d});
+    }
+    hits.sort(function (a, b) { return b.score - a.score || (a.d.d < b.d.d ? 1 : -1); });
+    return hits;
+  }
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text) node.textContent = text;
+    return node;
+  }
+
+  function render(query) {
+    var hits = search(query);
+    results.replaceChildren();
+    status.textContent = query.trim() ? hits.length + (hits.length === 1 ? " paper" : " papers") + (hits.length > LIMIT ? ", showing the first " + LIMIT : "") : docs.length + " papers indexed";
+    hits.slice(0, LIMIT).forEach(function (hit) {
+      var d = hit.d, li = el("li", "paper-row"), link = el("a", "paper-title", d.t);
+      link.href = d.p;
+      li.appendChild(link);
+      li.appendChild(el("div", "paper-meta", [d.d, d.a, d.c].filter(Boolean).join(" · ")));
+      li.appendChild(el("p", "paper-tldr", d.s));
+      results.appendChild(li);
+    });
+  }
+
+  var timer = null;
+  input.addEventListener("input", function () {
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      var url = new URL(window.location.href);
+      if (input.value) url.searchParams.set("q", input.value); else url.searchParams.delete("q");
+      window.history.replaceState(null, "", url);
+      render(input.value);
+    }, 80);
+  });
+  input.value = new URLSearchParams(window.location.search).get("q") || "";
+  render(input.value);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{% block title %}{{ site_title }}{% endblock %}</title>
+<link rel="stylesheet" href="{{ root }}assets/style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap header-row">
+    <a class="brand" href="{{ root }}index.html">{{ site_title }}</a>
+    <form class="search-form" action="{{ root }}search.html" method="get" role="search">
+      <input type="search" name="q" placeholder="Search papers" aria-label="Search papers">
+    </form>
+  </div>
+</header>
+<main class="wrap">
+{% block content %}{% endblock %}
+</main>
+<footer class="site-footer">
+  <div class="wrap">Summaries written and verified by LLM agents with Précis. Check the paper before you cite it.</div>
+</footer>
+{% block scripts %}{% endblock %}
+</body>
+</html>

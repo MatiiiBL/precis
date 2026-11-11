@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% from "macros.html" import chips, verdict_bar %}
+{% block content %}
+<section class="hero">
+  <h1>{{ site_title }}</h1>
+  <p class="lede">{{ "{:,}".format(facts.papers) }} papers{% if facts.first %} published {{ facts.first.isoformat() }} to {{ facts.last.isoformat() }}{% endif %}, read and summarized by LLM agents, every claim checked against the paper, and mapped into {{ topics | length }} topics.</p>
+</section>
+
+<section class="tiles" aria-label="Corpus at a glance">
+  <div class="tile"><span class="tile-value">{{ "{:,}".format(facts.papers) }}</span><span class="tile-label">papers</span></div>
+  <div class="tile"><span class="tile-value">{{ topics | length }}</span><span class="tile-label">topics</span></div>
+  {% if faith.final.total %}
+  <div class="tile"><span class="tile-value">{{ faith.final.rates()['supported'] | percent }}</span><span class="tile-label">claims supported by the paper</span></div>
+  <div class="tile"><span class="tile-value">{{ faith.revised }}</span><span class="tile-label">summaries revised after verification</span></div>
+  {% endif %}
+  {% if cost %}
+  <div class="tile"><span class="tile-value">${{ "{:,.2f}".format(cost.cost_usd) }}</span><span class="tile-label">model spend ({{ "{:,}".format(cost.calls) }} requests)</span></div>
+  {% endif %}
+</section>
+
+{% if report %}
+<section class="prose">
+  <h2>Introduction</h2>
+  {{ report.introduction | markdown }}
+</section>
+{% endif %}
+
+<section>
+  <h2>Topics</h2>
+  <div class="cards">
+    {% for topic in topics %}
+    <a class="card" href="topics/{{ topic.id }}.html">
+      <span class="card-kicker">{{ topic.paper_ids | length }} papers</span>
+      <span class="card-title">{{ topic.label }}</span>
+      <span class="card-text">{{ topic.description }}</span>
+      {{ chips(topic.keywords[:5]) }}
+    </a>
+    {% endfor %}
+  </div>
+</section>
+
+{% if faith.final.total %}
+<section>
+  <h2>Faithfulness</h2>
+  <p class="muted">A second agent checked the TL;DR and every finding of each summary against the paper, quoting its evidence. Summaries with an unsupported or contradicted claim were rewritten once and checked again.</p>
+  {{ verdict_bar(faith.draft, "First drafts") }}
+  {{ verdict_bar(faith.final, "Final summaries") }}
+  <ul class="legend">
+    {% for v, label in verdict_labels.items() %}<li><span class="swatch v-{{ v }}"></span>{{ label }}</li>{% endfor %}
+  </ul>
+  <p class="muted">{{ faith.flagged }} of {{ faith.verified }} first drafts had an unsupported or contradicted claim; {{ faith.revised }} were revised.{% if faith.revised_before.total %} Among them, supported claims went from {{ faith.revised_before.rates()['supported'] | percent }} to {{ faith.revised_after.rates()['supported'] | percent }}.{% endif %}</p>
+</section>
+{% endif %}
+
+{% if cost and cost.by_stage %}
+<section>
+  <h2>Model usage</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Step</th><th>Model</th><th class="num">Requests</th><th class="num">Input tokens</th><th class="num">Cache reads</th><th class="num">Output tokens</th><th class="num">Cost</th></tr></thead>
+    <tbody>
+      {% for row in cost.by_stage %}
+      <tr><td>{{ row.stage }}</td><td>{{ row.model }}</td><td class="num">{{ "{:,}".format(row.calls) }}</td><td class="num">{{ "{:,}".format(row.input_tokens) }}</td><td class="num">{{ "{:,}".format(row.cache_read_input_tokens) }}</td><td class="num">{{ "{:,}".format(row.output_tokens) }}</td><td class="num">${{ "{:,.2f}".format(row.cost_usd) }}</td></tr>
+      {% endfor %}
+    </tbody>
+    <tfoot><tr><td colspan="2">Total</td><td class="num">{{ "{:,}".format(cost.calls) }}</td><td class="num">{{ "{:,}".format(cost.input_tokens) }}</td><td class="num">{{ "{:,}".format(cost.cache_read_input_tokens) }}</td><td class="num">{{ "{:,}".format(cost.output_tokens) }}</td><td class="num">${{ "{:,.2f}".format(cost.cost_usd) }}</td></tr></tfoot>
+  </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}
