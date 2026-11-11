@@ -10,6 +10,7 @@ For each claim, choose one verdict:
 - `partial`: the core is right but part of it is off or missing from the paper: a number is rounded, a qualifier is dropped, or the scope is broader than the paper's (for example "on all benchmarks" when the paper shows two).
 - `unsupported`: you cannot find the claim in the paper after reading the cited sections and searching.
 - `contradicted`: the paper says something different: another number, the opposite direction, a different baseline or setting.
+- `unchecked`: only after a budget notice tells you to stop, for a claim you have not been able to check. It is recorded as not checked, which is better than a guess; never use it otherwise.
 
 Be strictest about numbers. A number the paper does not state anywhere (for example, one the summary computed, converted or rounded) makes the claim at most `partial`; a different value for the same quantity makes it `contradicted`. The tldr is `supported` only if every part of it is.
 

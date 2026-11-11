@@ -38,6 +38,7 @@ class AgentTrace:
     budget_notices: int = 0
     max_tokens_retries: int = 0
     quotes_not_found: int = 0
+    unchecked_claims: int = 0
     tokens_read: int = 0
     fraction_read: float = 0.0
 

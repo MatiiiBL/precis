@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from precis.agents.critic import QUOTE_NOT_FOUND, quotes_not_found, run_critic
+from precis.config import AgentConfig
 from precis.models import PaperSummary, Verdict
 
 from .helpers import (
@@ -124,6 +125,35 @@ async def test_unsupported_verdict_may_have_no_quote() -> None:
     result = await verify(gw)
     assert result.value.checks[2].verdict is Verdict.UNSUPPORTED
     assert result.value.needs_revision()
+
+
+async def test_claims_left_unchecked_at_the_budget_are_left_out_of_the_record() -> None:
+    search = tool_turn(call("search_paper", {"query": "misses"}))
+    unchecked = check("finding:1", "unchecked", "", None)
+    gw = ScriptedGateway(
+        [search, submit(GOOD[0], check("finding:0", "unchecked", "", None), unchecked)]
+    )
+    doc = make_doc()
+    config = agents_config(critic=AgentConfig(max_turns=3))
+    result = await run_critic(gw, make_meta(), doc, summary(), config)
+    assert gw.requests[1]["messages"][-1]["role"] == "system"  # the budget notice
+    verification = result.value
+    assert [c.target for c in verification.checks] == ["tldr"]
+    # Not checked is not a failure: no revision, and no effect on verdict rates.
+    assert not verification.needs_revision()
+    assert verification.supported_fraction() == 1.0
+    assert result.trace.unchecked_claims == 2
+
+
+async def test_unchecked_is_rejected_before_the_budget_notice() -> None:
+    lazy = submit(GOOD[0], GOOD[1], check("finding:1", "unchecked", "", None))
+    gw = ScriptedGateway([lazy, submit(*GOOD)])
+    result = await verify(gw)
+    [error] = last_user_blocks(gw.requests[1])
+    assert (
+        "finding:1: unchecked is only for claims left when the budget runs out" in error["content"]
+    )
+    assert len(result.value.checks) == 3
 
 
 async def test_stage_label_can_be_overridden() -> None:

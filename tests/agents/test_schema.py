@@ -8,6 +8,7 @@ from precis.agents.critic import CHECKS_SCHEMA
 from precis.agents.prompts import load_prompt
 from precis.agents.submissions import SUMMARY_SCHEMA
 from precis.agents.tools import READING_TOOLS
+from precis.models import Verdict
 
 _UNSUPPORTED = {
     "$ref",
@@ -60,7 +61,8 @@ def test_model_facing_descriptions_replace_developer_ones() -> None:
     target = CHECKS_SCHEMA["properties"]["checks"]["items"]["properties"]["target"]
     assert "PaperSummary" not in target["description"]
     verdict = CHECKS_SCHEMA["properties"]["checks"]["items"]["properties"]["verdict"]
-    assert verdict["enum"] == ["supported", "partial", "unsupported", "contradicted"]
+    # Every stored verdict, plus "unchecked", which never reaches a stored record.
+    assert verdict["enum"] == [*(v.value for v in Verdict), "unchecked"]
     section = CHECKS_SCHEMA["properties"]["checks"]["items"]["properties"]["section_id"]
     assert [o["type"] for o in section["anyOf"]] == ["string", "null"]
     assert "description" not in section["anyOf"][0]

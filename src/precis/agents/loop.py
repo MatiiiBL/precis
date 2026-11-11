@@ -33,7 +33,7 @@ from precis.agents.messages import (
     tool_result,
 )
 from precis.agents.prompts import Prompt
-from precis.agents.submissions import SubmissionRejected, SubmitTool
+from precis.agents.submissions import SubmissionRejected, SubmitContext, SubmitTool
 from precis.agents.tools import READING_TOOL_NAMES, READING_TOOLS, ReadingTools, ToolOutput
 from precis.agents.trace import AgentResult, AgentTrace
 from precis.config import AgentConfig, CacheTTL
@@ -122,8 +122,9 @@ async def run_agent[T](
         results = []
         for call in calls:
             if call.name == spec.submit.name:
+                context = SubmitContext(budget_notice=trace.budget_notices > 0)
                 try:
-                    value = spec.submit.parse(call.input)
+                    value = spec.submit.parse(call.input, context)
                 except SubmissionRejected as rejected:
                     trace.rejected_submissions += 1
                     results.append(tool_result(call.id, str(rejected), is_error=True))

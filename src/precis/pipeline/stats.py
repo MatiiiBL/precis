@@ -127,5 +127,6 @@ def _stage_summary(tally: StageTally) -> dict[str, Any]:
             "budget_notices": sum(t.budget_notices for t in traces),
             "max_tokens_retries": sum(t.max_tokens_retries for t in traces),
             "quotes_not_found": sum(t.quotes_not_found for t in traces),
+            "unchecked_claims": sum(t.unchecked_claims for t in traces),
         }
     return out

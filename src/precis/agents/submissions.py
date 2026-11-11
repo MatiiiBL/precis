@@ -31,13 +31,21 @@ class SubmissionRejected(Exception):
 
 
 @dataclass(frozen=True)
+class SubmitContext:
+    """What the loop knows when a submission arrives."""
+
+    budget_notice: bool
+    """The model has been told to stop reading and submit."""
+
+
+@dataclass(frozen=True)
 class SubmitTool[T]:
     """A tool whose valid call ends the agent's run with a result."""
 
     name: str
     description: str
     input_schema: dict[str, Any]
-    parse: Callable[[Mapping[str, Any]], T]
+    parse: Callable[[Mapping[str, Any], SubmitContext], T]
 
     @property
     def definition(self) -> dict[str, Any]:
@@ -98,7 +106,7 @@ def summary_tool(view: PaperView) -> SubmitTool[SummaryDraft]:
             "is rejected, fix what the error names and call it again with the complete summary."
         ),
         input_schema=SUMMARY_SCHEMA,
-        parse=lambda data: parse_summary(view, data),
+        parse=lambda data, _context: parse_summary(view, data),
     )
 
 
