@@ -1,5 +1,6 @@
 from typing import Any
 
+import anthropic
 import pytest
 from anthropic.types import Message
 from anthropic.types.beta import BetaMessage
@@ -11,6 +12,7 @@ from precis.llm import (
     GatewayStats,
     RefusalError,
     UnpricedModelError,
+    make_client,
 )
 from precis.llm.clock import ManualClock
 from precis.llm.fake import FakeAnthropic, FakeReply, Faults, ServerLimits
@@ -277,3 +279,11 @@ async def test_client_side_limits_prevent_429s(store: Store, clock: ManualClock)
     assert fake.count("429") == 0
     # One request's worth of burst, then one every six seconds.
     assert clock.now() >= 6 * 11 - 1
+
+
+def test_make_client_turns_off_sdk_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    client = make_client(config(limits={"request_timeout_s": 90}))
+    assert isinstance(client, anthropic.AsyncAnthropic)
+    assert client.max_retries == 0
+    assert client.timeout == 90

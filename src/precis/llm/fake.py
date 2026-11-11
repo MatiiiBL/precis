@@ -36,7 +36,7 @@ import itertools
 import math
 import random
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NoReturn
 
@@ -746,13 +746,9 @@ class _BetaMessages:
         return await raw.parse()
 
 
-@dataclass
 class _Beta:
-    fake: FakeAnthropic
-    messages: _BetaMessages = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.messages = _BetaMessages(self.fake)
+    def __init__(self, fake: FakeAnthropic) -> None:
+        self.messages = _BetaMessages(fake)
 
 
 def _seconds(value: float) -> str:
