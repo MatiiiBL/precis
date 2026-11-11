@@ -113,6 +113,22 @@ def test_bigrams_stay_within_list_items() -> None:
     ]
 
 
+def test_latex_markup_is_not_vocabulary() -> None:
+    terms = analyze(r"Mitigation with $\mathrm{PRAC}$ costs $O(n^2)$, \textbf{DRAM timing}")
+    assert "mathrm" not in " ".join(terms)
+    assert "textbf" not in " ".join(terms)
+    assert {"prac", "dram timing", "mitigation"} <= set(terms)
+    assert all(len(term) > 1 for term in terms)
+
+
+def test_small_corpora_are_not_split_into_singletons() -> None:
+    papers, _ = themed_corpus(11)  # 44 papers, four themes
+    ids = [p.id for p in papers]
+    clustering = cluster_papers(ids, [topic_text(p.summary) for p in papers], k_min=2, k_max=24)
+    assert max(clustering.silhouette) <= 7  # about sqrt(44)
+    assert np.bincount(clustering.labels).min() >= 3
+
+
 def test_phrases_replace_the_words_they_contain() -> None:
     texts = ["cache replacement policy"] * 3 + ["qubit routing"] * 3
     keywords = class_keywords(texts, np.array([0, 0, 0, 1, 1, 1]))

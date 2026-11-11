@@ -154,7 +154,12 @@ class CorpusConfig(Record):
     seed: int = Field(default=0, description="Seeds SVD and k-means, so topics are reproducible.")
     k: int | None = Field(default=None, gt=0, description="Number of topics; None = silhouette.")
     k_min: int = Field(default=6, ge=2, description="Smallest k tried by the silhouette search.")
-    k_max: int = Field(default=24, ge=2, description="Largest k tried by the silhouette search.")
+    k_max: int = Field(
+        default=24, ge=2, description="Largest k tried by the silhouette search (and ~sqrt(n))."
+    )
+    min_topic_size: int = Field(
+        default=3, ge=1, description="The silhouette search avoids k with a topic this small."
+    )
     svd_components: int = Field(default=100, gt=1, description="Dimensions kept by truncated SVD.")
     central_papers: int = Field(
         default=8, gt=0, description="Most central papers shown to the model that names a topic."

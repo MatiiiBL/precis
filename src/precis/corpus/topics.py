@@ -21,9 +21,9 @@ names stay distinct.
 
 from __future__ import annotations
 
-import asyncio
 import itertools
 import logging
+import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -38,6 +38,7 @@ from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, CountVectorizer,
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import normalize
 
+from precis.agents.strategies import gather_all
 from precis.config import AgentConfig, CorpusConfig
 from precis.corpus.load import FinishedPaper
 from precis.corpus.structured import request_structured, structured_params
@@ -74,18 +75,21 @@ STOP_WORDS = ENGLISH_STOP_WORDS | TECHNICAL_STOP_WORDS
 # ("3d" is dropped, "network-on-chip" and "gpt-4" are kept whole).
 _TOKEN = re.compile(r"\b[a-z][a-z0-9]*(?:-[a-z0-9]+)*\b")
 _SEGMENT = re.compile(r"[,;:.!?()\[\]\n]+(?:\s|$)|\n")
+# LaTeX that summaries copy from papers: "\mathrm{PRAC}" keeps "PRAC".
+_LATEX = re.compile(r"\\[a-zA-Z]+\*?|[${}^_]")
 
 
 def analyze(text: str) -> list[str]:
-    """Unigrams and bigrams of ``text``, without stop words.
+    """Unigrams and bigrams of ``text``, without stop words or LaTeX markup.
 
     Bigrams are formed within a clause or list item only, so the keyword
     list "caches, prefetching" does not produce the phrase "caches
-    prefetching".
+    prefetching". LaTeX commands and math delimiters are dropped and their
+    arguments kept, so ``$\\mathrm{PRAC}$`` counts as "prac", not "mathrm prac".
     """
     terms: list[str] = []
-    for segment in _SEGMENT.split(text.lower()):
-        words = [w for w in _TOKEN.findall(segment) if w not in STOP_WORDS]
+    for segment in _SEGMENT.split(_LATEX.sub(" ", text).lower()):
+        words = [w for w in _TOKEN.findall(segment) if len(w) > 1 and w not in STOP_WORDS]
         terms += words
         terms += [f"{a} {b}" for a, b in itertools.pairwise(words)]
     return terms
@@ -166,15 +170,19 @@ def cluster_papers(
     k: int | None = None,
     k_min: int = 6,
     k_max: int = 24,
+    min_size: int = 3,
     svd_components: int = 100,
     seed: int = 0,
 ) -> Clustering:
     """Cluster ``texts`` into ``k`` groups, or into the k in ``k_min..k_max`` that
     maximizes the cosine silhouette score.
 
-    The candidate range is clipped to what the corpus can support (at least
-    two papers per cluster on average), and a corpus too small to split forms
-    a single cluster.
+    The silhouette score rewards tight clusters, and on a small corpus the
+    tightest clusters are single papers: unchecked, 45 papers split into 21
+    topics, most of them one or two papers long. So the range is capped at
+    about sqrt(n), and a k that leaves any topic smaller than ``min_size``
+    papers is only chosen when no k avoids it (then the smallest such k). A
+    corpus too small to split forms a single cluster.
     """
     if len(paper_ids) != len(texts):
         raise ValueError("paper_ids and texts must have the same length")
@@ -187,7 +195,7 @@ def cluster_papers(
         chosen = min(k, n)
         labels = _kmeans(vectors, chosen, seed) if chosen > 1 else np.zeros(n, dtype=np.int64)
     else:
-        upper = min(k_max, n // 2)
+        upper = min(k_max, n // 2, max(2, math.ceil(math.sqrt(n))))
         lower = min(k_min, upper)
         candidates: dict[int, IntVector] = {}
         for candidate in range(max(lower, 2), upper + 1):
@@ -198,9 +206,15 @@ def cluster_papers(
             scores[candidate] = float(
                 silhouette_score(vectors, found, metric="cosine", random_state=seed)
             )
-        if scores:
+        large_enough = [
+            c for c, found in candidates.items() if np.bincount(found).min() >= min_size
+        ]
+        if large_enough:
             # Highest score wins; on a tie, the smaller k.
-            chosen = max(scores, key=lambda c: (scores[c], -c))
+            chosen = max(large_enough, key=lambda c: (scores[c], -c))
+            labels = candidates[chosen]
+        elif candidates:
+            chosen = min(candidates)
             labels = candidates[chosen]
         else:
             chosen, labels = 1, np.zeros(n, dtype=np.int64)
@@ -349,6 +363,7 @@ async def build_topics(
         k=k if k is not None else config.k,
         k_min=config.k_min,
         k_max=config.k_max,
+        min_size=config.min_topic_size,
         svd_components=config.svd_components,
         seed=config.seed,
     )
@@ -363,11 +378,9 @@ async def build_topics(
         )
         for c, rows in enumerate(members)
     ]
-    labels = await asyncio.gather(
-        *(
-            request_structured(gw, label_params(brief, agent), TopicLabel, stage="label")
-            for brief in briefs
-        )
+    labels = await gather_all(
+        request_structured(gw, label_params(brief, agent), TopicLabel, stage="label")
+        for brief in briefs
     )
     topics = [
         Topic(
