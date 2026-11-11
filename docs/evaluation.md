@@ -308,9 +308,10 @@ model at `claude-opus-5-5` prices.
   not count, as on the API.
 - *Latency:* 2 s to the first token plus 20 ms per output token (about 50
   tokens/s, thinking included), with log-normal jitter (sigma 0.35).
-- *Client:* the gateway's defaults (adaptive concurrency from 8, growing by
-  one per window of successes and halving on 429/529; token buckets learned
-  from the `anthropic-ratelimit-*` headers), with the concurrency ceiling set
+- *Client:* the gateway's defaults (adaptive concurrency from 8, doubling
+  per window of successes until the first 429/529, then growing by one per
+  window and halving on 429/529; token buckets learned from the
+  `anthropic-ratelimit-*` headers), with the concurrency ceiling set
   to the swept value and `2 x ceiling` papers in flight so the scheduler
   never starves the gateway. Each ceiling runs on a fresh store.
 
@@ -349,31 +350,47 @@ Apple M4 laptop; the simulated numbers are exactly reproducible.
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 4 | 7.9 | 40 | 1% | 5% | 2% | 0 | 4 | 0.9 | 1.7 |
 | 8 | 15.9 | 80 | 2% | 9% | 4% | 0 | 8 | 0.9 | 1.7 |
-| 16 | 31.7 | 159 | 4% | 19% | 8% | 0 | 16 | 0.9 | 1.6 |
-| 32 | 61.1 | 307 | 8% | 36% | 15% | 0 | 32 | 0.9 | 1.7 |
-| 64 | 108.1 | 543 | 14% | 63% | 27% | 0 | 64 | 0.9 | 2.2 |
-| 128 | 130.6 | 656 | 16% | 76% | 33% | 0 | 128 | 1.5 | 3.7 |
-| 256 | 132.0 | 663 | 17% | 77% | 33% | 0 | 142 | 2.9 | 6.1 |
+| 16 | 31.6 | 159 | 4% | 18% | 8% | 0 | 16 | 0.9 | 1.6 |
+| 32 | 62.9 | 316 | 8% | 37% | 16% | 0 | 32 | 0.9 | 1.7 |
+| 64 | 123.1 | 618 | 15% | 72% | 31% | 0 | 64 | 0.9 | 1.7 |
+| 128 | 165.1 | 829 | 21% | 96% | 42% | 0 | 128 | 1.3 | 2.4 |
+| 256 | 166.3 | 835 | 21% | 97% | 42% | 0 | 256 | 2.4 | 4.7 |
 
 - **Up to a ceiling of 64, throughput is proportional to concurrency:**
   about 1.9 papers per minute per slot, as Little's law predicts for about
   five requests per paper and a mean response time of about 6 s. Paper
   latency stays flat (p50 0.9 min, p95 1.7 min) because nothing queues.
-- **Above 64 it flattens at about 131 papers/min with every limit unused
-  and no 429s.** The bottleneck is the adaptive window's ramp, not the
-  server: the window starts at `limits.initial_concurrency` (8) and grows
-  by one per window of successes, so reaching 128 takes about 8,000
-  successful requests, most of this 10,000-request run, and at a ceiling of
-  256 the window ended the run at 142. Started at the ceiling instead
-  (`[limits] initial_concurrency = 256`), the same runs reach 165.8 papers/min
-  at 128 and 170.3 at 256, using 97% and 99% of the input-token limit, still
-  with no 429s: the client's input-token bucket then binds, as it should.
-  Doubling the input-token limit without that change only reached 145 and
-  149. A multiplicative start (doubling until the first overload or until a
-  bucket binds) would remove the ramp for runs of this size.
+- **From 128 the input-token limit binds: 165-166 papers/min at 96-97% of
+  the input tokens per minute, with no 429s.** The client's input-token
+  bucket holds the rate just under the server's, which is what admission
+  control is for; requests and output tokens have room to spare because
+  cache reads do not count toward the input limit and the offline replies
+  are short.
+- **The adaptive window's start used to be the bottleneck.** In the first
+  version of these runs the window grew by one slot per window of
+  successes from 8, so reaching 128 took about 8,000 of the run's 10,000
+  requests: throughput flattened at about 131 papers/min with 23% of the
+  input-token limit unused (and only 108 at a ceiling of 64), and at 256
+  the window ended the run at 142. The gateway now starts in slow start, as
+  TCP does, doubling the window per round trip until the first 429 or 529,
+  and only then grows it by one per window. Before and after, from the same
+  seeds:
+
+  | Ceiling | Papers/min, additive start | Papers/min, slow start | ITPM used | p95 paper (min) | Final window |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 32 | 61.1 | 62.9 | 36% → 37% | 1.7 → 1.7 | 32 → 32 |
+  | 64 | 108.1 | 123.1 (+14%) | 63% → 72% | 2.2 → 1.7 | 64 → 64 |
+  | 128 | 130.6 | 165.1 (+26%) | 76% → 96% | 3.7 → 2.4 | 128 → 128 |
+  | 256 | 132.0 | 166.3 (+26%) | 77% → 97% | 6.1 → 4.7 | 142 → 256 |
+
+  That is within 0.4% (at 128) and 2.3% (at 256) of starting each run at its ceiling
+  (`[limits] initial_concurrency = 256`, measured before the change: 165.8
+  papers/min at 128 and 170.3 at 256), without having to know the right
+  ceiling in advance, and with no 429 at any ceiling.
 - **Latency grows once papers queue for admission:** with `2 x ceiling`
-  papers in flight, p95 paper latency rises from 1.7 minutes at 32 to 6.1
-  at 256, for 25% more throughput than at 64.
+  papers in flight, p95 paper latency rises from 1.7 minutes at 64 to 4.7
+  at 256, where the extra slots buy less than 1% more throughput than at
+  128: once a token limit binds, more concurrency only lengthens the queue.
 - **Admission control holds the limits exactly.** No ceiling produced a
   429. With the request limit lowered to 60 per minute and 64 slots, the
   gateway learns the limit from the response headers and stays under it
