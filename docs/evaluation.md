@@ -249,7 +249,7 @@ before/after comparison has a selection effect: those claims were chosen
 because they failed, and the same critic re-checks text written in
 response to its own notes, so the "after" rate is an upper bound on how
 much revision helps. A random sample of verdicts checked by hand is the
-honest calibration; section 6 has a place for it.
+honest calibration.
 
 ### 4.3 Strategy ablation (`precis eval ablation --n N`)
 
@@ -431,18 +431,22 @@ uninterrupted throughput runs (on a different subset of the synthetic
 papers): the crash cost one re-sent request, and the failed attempts cost
 nothing, since only answered requests are billed.
 
-### Real-model results
+### Measuring a real model
 
-> **To be filled in from a run against the API** (`precis eval abstract`,
-> `precis eval faithfulness`, `precis eval ablation`). The commands write
-> their tables to `results/*.md`.
+Every number in this repository comes from offline runs, which need no API
+key and spend nothing. The evaluations above are built and tested offline
+but have not been run against the API: their results depend on the model,
+and a run costs money. To measure a model, fetch papers as in the README,
+then:
 
-| Measure | Value |
-|---|---|
-| Key-point recall, summaries without the abstract | *pending* |
-| ROUGE-L F1, own abstract / mismatched abstract | *pending* |
-| Supported claims, first drafts / final summaries | *pending* |
-| Quotes not found verbatim | *pending* |
-| Hand-checked verdicts that agree with the critic | *pending* |
-| Ablation (agentic / fulltext / mapreduce) | *pending* |
-| Topics chosen (k) and citations removed from the syntheses | *pending* |
+| Measure | Command | Method |
+|---|---|---|
+| Key-point recall and ROUGE-L of summaries written without the abstract | `precis eval abstract --n N` | 4.1 |
+| Verdict rates before and after revision, and the quote audit | `precis run`, then `precis eval faithfulness` | 4.2 |
+| Quality, cost and latency of each reading strategy | `precis eval ablation --n N` | 4.3 |
+| Topics chosen and citations removed from the syntheses | `precis topics`, `precis report` | 1, 2 |
+
+The commands write their tables to `results/*.md`. `precis run --max-cost
+USD` caps the store's total spend, and `--mode batch` halves the price at
+the cost of latency; running 20 papers in each mode first shows what a
+paper costs with the chosen model before committing to a corpus.

@@ -37,7 +37,7 @@ flowchart LR
     D[("SQLite store<br/>every stage, call and reply")] -.- G
 ```
 
-## Results so far
+## Results
 
 | What | Result |
 |---|---|
@@ -52,11 +52,12 @@ flowchart LR
 
 The offline and simulated rows measure the system's machinery: scheduling,
 admission control, retries, caching and resumption. Deterministic stand-ins
-play the models. Measuring summary quality with a real model takes a run
-against the API. The tools for it are built and tested: recall of the
-paper's key points without its abstract, claim faithfulness, and a
-comparison of the three reading strategies. Their results will go in
-[docs/evaluation.md](docs/evaluation.md#real-model-results).
+play the models, so every number here is reproducible without an API key or
+any spend. Summary quality depends on the model and is measured by the
+evaluation commands, which are built and tested offline: recall of a
+paper's key points without its abstract, claim faithfulness with a quote
+audit, and a comparison of the three reading strategies
+([how to run them against a model](docs/evaluation.md#measuring-a-real-model)).
 
 ## Quick start
 
@@ -221,8 +222,9 @@ between packages. Each package has its own document with measurements:
 
 ## Limitations
 
-- **No real-model results yet.** Quality numbers need a run against the
-  API; the harness and its tests are in place.
+- **Summary quality is not measured here.** That takes a paid run against
+  the API; the evaluation commands are ready for one, and a run can be
+  capped with `--max-cost`.
 - **Offline numbers measure machinery, not judgement.** How much a real
   model chooses to read, and how often it gets rejected or revised, will
   differ.
