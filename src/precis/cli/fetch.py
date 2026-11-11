@@ -261,6 +261,8 @@ def _runner(
     runner = FetchRunner(
         store, config_hash=fetch_config_hash(config.fetch), run_id=run_id, on_outcome=on_outcome
     )
+    if reset := runner.reset_interrupted():
+        progress.console.print(f"reset {reset} fetch stages left running by an earlier crash")
     return runner
 
 

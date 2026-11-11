@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,19 @@ def _full_text(paper_id: str, fallback: str | None = None) -> FullText:
 def _runner(store: Store, outcomes: list[Outcome] | None = None, config_hash: str = HASH) -> Any:
     on_outcome = outcomes.append if outcomes is not None else None
     return FetchRunner(store, config_hash=config_hash, run_id="r1", on_outcome=on_outcome)
+
+
+def _running(paper_id: str, stage: Stage) -> StageRecord:
+    """A stage a crashed process left running."""
+    return StageRecord(
+        paper_id=paper_id,
+        stage=stage,
+        status=StageStatus.RUNNING,
+        attempts=1,
+        config_hash="x",
+        run_id="crashed",
+        updated_at=datetime.now(UTC),
+    )
 
 
 def _stage(store: Store, paper_id: str) -> StageRecord:
@@ -161,6 +174,19 @@ async def test_a_document_the_store_cannot_write_fails_that_paper_only(store: St
     assert store.get_document("2507.00001") is None
     assert _stage(store, "2507.00002").status is StageStatus.DONE
     assert runner.stats.counts == {"failed": 1, "html": 1}
+
+
+def test_a_crashed_fetch_is_reset_without_touching_other_stages(store: Store) -> None:
+    """Review R9: a fetch must not reset the rows of a `precis run` in progress."""
+    for paper_id, stage in (("2507.00001", Stage.FETCH), ("2507.00002", Stage.READ)):
+        store.set_stage(_running(paper_id, stage))
+    runner = _runner(store)
+    assert runner.reset_interrupted() == 1
+    assert _stage(store, "2507.00001").status is StageStatus.PENDING
+    read = store.get_stage("2507.00002", Stage.READ)
+    assert read is not None
+    assert read.status is StageStatus.RUNNING
+    assert runner.stats.as_dict()["reset"] == 1
 
 
 async def test_an_interrupted_paper_goes_back_to_pending(store: Store) -> None:

@@ -66,6 +66,7 @@ class FetchStats:
     tokens: list[int] = field(default_factory=list)
     found: int = 0  # papers the search, id lookup or directory listing returned
     requests: int = 0  # HTTP requests made, retries included
+    reset: int = 0  # fetch stages an earlier crash left running
 
     def add(self, outcome: Outcome) -> None:
         self.counts[outcome.status] += 1
@@ -84,6 +85,7 @@ class FetchStats:
             "tokens": sorted(self.tokens),
             "found": self.found,
             "requests": self.requests,
+            "reset": self.reset,
         }
 
 
@@ -105,6 +107,15 @@ class FetchRunner:
         self.workers = workers
         self.stats = FetchStats()
         self._on_outcome = on_outcome
+
+    def reset_interrupted(self) -> int:
+        """Put fetch stages a crashed run left ``running`` back to ``pending``.
+
+        Only ``fetch`` rows: a ``precis run`` working on the same store keeps
+        its ``read``/``verify``/``revise`` rows. Returns how many were reset.
+        """
+        self.stats.reset = self.store.reset_running(stages=[Stage.FETCH])
+        return self.stats.reset
 
     def is_done(self, paper_id: str, version: int | None = None) -> bool:
         """Whether the paper's text is stored with the current settings (and arXiv version)."""

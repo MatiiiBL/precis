@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx2 as httpx
@@ -8,7 +9,7 @@ from precis.cli import app
 from precis.cli import fetch as fetch_cli
 from precis.config import FetchConfig
 from precis.llm.clock import ManualClock
-from precis.models import Stage, StageStatus
+from precis.models import Stage, StageRecord, StageStatus
 from precis.sources.http import ArxivHttp
 from precis.store import Store
 
@@ -113,6 +114,35 @@ def test_metadata_only_and_limit(site: FakeArxiv, config: Path, tmp_path: Path) 
         assert sorted(p.id for p in store.list_papers()) == IDS[:2]
         assert store.papers_with_status(Stage.FETCH, StageStatus.PENDING) == IDS[:2]
         assert store.get_document(IDS[0]) is None
+
+
+def test_a_fetch_resets_only_fetch_stages_left_running(
+    site: FakeArxiv, config: Path, tmp_path: Path
+) -> None:
+    now = datetime.now(UTC)
+    with _store(tmp_path) as store:
+        for paper_id, stage in (("2507.00001", Stage.FETCH), ("2507.00009", Stage.READ)):
+            store.set_stage(
+                StageRecord(
+                    paper_id=paper_id,
+                    stage=stage,
+                    status=StageStatus.RUNNING,
+                    attempts=1,
+                    config_hash="x",
+                    run_id="crashed",
+                    updated_at=now,
+                )
+            )
+    code, output = _run(config, "ids", "2507.00001")
+    assert code == 0, output
+    assert "reset 1 fetch stages left running" in output
+    with _store(tmp_path) as store:
+        fetch = store.get_stage("2507.00001", Stage.FETCH)
+        read = store.get_stage("2507.00009", Stage.READ)
+    assert fetch is not None
+    assert fetch.status is StageStatus.DONE
+    assert read is not None
+    assert read.status is StageStatus.RUNNING
 
 
 def test_fetch_ids(site: FakeArxiv, config: Path, tmp_path: Path) -> None:
