@@ -35,7 +35,7 @@ from precis.llm.limiter import Admission, Outcome, Ticket, Usage
 from precis.llm.models import FALLBACK_BETA, FALLBACK_TARGETS, supports_fallbacks
 from precis.llm.pricing import check_priced, estimate_cost, reply_cost
 from precis.models import LLMCall
-from precis.store import Store
+from precis.store import BatchItem, Store
 from precis.util import canonical_json, estimate_tokens, sha256_hex
 
 log = logging.getLogger(__name__)
@@ -166,8 +166,10 @@ class Gateway:
             otpm=limits.otpm,
             burst_s=limits.burst_s,
         )
-        self._batches = (
-            BatchQueue(client, self._clock, limits, self._rng) if mode == "batch" else None
+        # Built in both modes: an online run also collects the results of
+        # batches an earlier batch-mode run left open.
+        self._batches = BatchQueue(
+            client, self._clock, limits, self._rng, store, self._on_batch_result
         )
         self._counters = _Counters()
         self._reserved_usd = 0.0
@@ -198,8 +200,8 @@ class Gateway:
         c = self._counters
         batches = self._batches
         return GatewayStats(
-            in_flight=self._admission.in_flight + (batches.in_batches if batches else 0),
-            queued=self._admission.queued + (batches.queued if batches else 0),
+            in_flight=self._admission.in_flight + batches.in_batches,
+            queued=self._admission.queued + batches.queued,
             concurrency_limit=self._admission.concurrency_limit,
             calls=c.calls,
             cached_calls=c.cached_calls,
@@ -212,7 +214,7 @@ class Gateway:
             cache_creation_input_tokens=c.cache_creation_input_tokens,
             cache_read_input_tokens=c.cache_read_input_tokens,
             cost_usd=c.cost_usd,
-            batches_pending=batches.batches_pending if batches else 0,
+            batches_pending=batches.batches_pending,
             refusals=c.refusals,
             server_errors=c.server_errors,
             timeouts=c.timeouts,
@@ -223,9 +225,13 @@ class Gateway:
         )
 
     async def aclose(self) -> None:
-        """Send any queued batch requests and wait for every pending batch to finish."""
-        if self._batches is not None:
-            await self._batches.aclose()
+        """Stop without waiting for batches that are still processing.
+
+        Requests not yet sent are dropped; batches already sent stay
+        recorded in the store (and are named in the log), and the next
+        gateway on this store collects their results.
+        """
+        await self._batches.aclose()
 
     @contextmanager
     def cache_scope(self, salt: str) -> Iterator[None]:
@@ -264,26 +270,35 @@ class Gateway:
                 if reply is not None:
                     return reply
 
+        self._batches.start_collecting()
         estimate = self._estimate(params, stage)
         self._check_budget(estimate, params)
         self._reserved_usd += estimate.cost_usd
         try:
-            if self._batches is None:
-                response = await self._send_online(params, estimate)
+            if self._mode == "batch":
+                # The queue files the result (accounting and cache) itself,
+                # whether or not this caller is still waiting for it.
+                reply = await self._batches.submit(params, request_hash, stage, paper_id)
             else:
-                result = await self._batches.submit(params)
-                response = _Response(
-                    result.message, result.attempts, result.latency_s, None, batch=True
-                )
+                response = await self._send_online(params, estimate)
+                reply = self._accept(response, request_hash, stage, paper_id, started_at)
+        except RefusalError:
+            raise
         except GatewayError as e:
             self._counters.errors += 1
             self._record_failure(model, request_hash, stage, paper_id, started_at, e)
             raise
         finally:
             self._reserved_usd -= estimate.cost_usd
+        self._learn(stage, estimate, reply)
+        return reply
 
-        self._learn(stage, estimate, response.reply)
-        return self._accept(response, request_hash, stage, paper_id, started_at)
+    def _on_batch_result(
+        self, item: BatchItem, message: Message, attempts: int, latency_s: float
+    ) -> Reply:
+        response = _Response(message, attempts, latency_s, None, batch=True)
+        started_at = datetime.now(UTC)
+        return self._accept(response, item.request_hash, item.stage, item.paper_id, started_at)
 
     # ------------------------------------------------------------------
     # cache, budget and estimates

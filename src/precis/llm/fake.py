@@ -54,6 +54,7 @@ from precis.llm.pricing import PRICES
 from precis.util import canonical_json, estimate_tokens, sha256_hex
 
 type Responder = Callable[[dict[str, Any]], FakeReply | None]
+type BatchOperation = Literal["create", "retrieve", "results", "results_stream"]
 type FaultKind = Literal[
     "rate_limit",
     "overloaded",
@@ -238,6 +239,9 @@ class FakeAnthropic:
         self._buckets: tuple[TokenBucket, TokenBucket, TokenBucket] | None = None
         self._cache: dict[str, float] = {}
         self._batches: dict[str, _Batch] = {}
+        self._batch_api_faults: dict[BatchOperation, int] = {}
+        self.max_batch_bytes: int | None = None
+        """Answer 413 to a batch whose serialized requests are larger than this."""
         self._counter = 0
         self.set_limits(limits)
         self.messages = _Messages(self)
@@ -253,6 +257,20 @@ class FakeAnthropic:
     def fail_next(self, *kinds: FaultKind) -> None:
         """Make the next requests fail with these faults, in order."""
         self._scripted.extend(kinds)
+
+    def fail_batch_api(self, operation: BatchOperation, times: int = 1) -> None:
+        """Make the next ``times`` Batches API calls of this kind fail with a connection error.
+
+        ``results_stream`` fails a results stream after its first entry.
+        """
+        self._batch_api_faults[operation] = self._batch_api_faults.get(operation, 0) + times
+
+    def _batch_api_fault(self, operation: BatchOperation) -> None:
+        if self._batch_api_faults.get(operation, 0) > 0:
+            self._batch_api_faults[operation] -= 1
+            raise anthropic.APIConnectionError(
+                request=httpx2.Request("GET", "https://api.anthropic.com/v1/messages/batches")
+            )
 
     def set_limits(self, limits: ServerLimits | None) -> None:
         """Change the simulated server limits; the buckets start full."""
@@ -631,6 +649,9 @@ class FakeAnthropic:
         for _, params in items:
             if "fallbacks" in params or params.get("stream"):
                 self._raise(400, "invalid_request_error", "batch requests can't set this field")
+        size = len(canonical_json(items).encode())
+        if self.max_batch_bytes is not None and size > self.max_batch_bytes:
+            self._raise(413, "request_too_large", f"batch of {size} bytes is too large")
         batch = _Batch(f"msgbatch_fake_{self._counter:06d}", now, now + self.batch_latency_s, items)
         self._batches[batch.id] = batch
         return self._batch_object(batch)
@@ -703,7 +724,9 @@ class FakeAnthropic:
         batch = self._batch(message_batch_id)
         if batch.results is None:
             self._raise(400, "invalid_request_error", "batch has not ended yet")
-        for result in batch.results or []:
+        for i, result in enumerate(batch.results or []):
+            if i == 1:
+                self._batch_api_fault("results_stream")
             yield MessageBatchIndividualResponse.model_validate(result)
             await asyncio.sleep(0)
 
@@ -711,6 +734,7 @@ class FakeAnthropic:
 _ERRORS: dict[int, type[anthropic.APIStatusError]] = {
     400: anthropic.BadRequestError,
     404: anthropic.NotFoundError,
+    413: anthropic.ContentTooLargeError,
     429: anthropic.RateLimitError,
     500: anthropic.InternalServerError,
     529: anthropic.OverloadedError,
@@ -803,12 +827,15 @@ class _Batches:
         self._fake = fake
 
     async def create(self, *, requests: Iterable[Any]) -> MessageBatch:
+        self._fake._batch_api_fault("create")
         return self._fake._create_batch(requests)
 
     async def retrieve(self, message_batch_id: str) -> MessageBatch:
+        self._fake._batch_api_fault("retrieve")
         return self._fake._batch_object(self._fake._batch(message_batch_id))
 
     async def results(self, message_batch_id: str) -> AsyncIterator[MessageBatchIndividualResponse]:
+        self._fake._batch_api_fault("results")
         self._fake._batch(message_batch_id)
         return self._fake._results(message_batch_id)
 

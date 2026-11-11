@@ -94,6 +94,11 @@ class LimitsConfig(Record):
     batch_max_requests: int = Field(
         default=500, gt=0, le=100_000, description="Batch mode: send a batch at this many requests."
     )
+    batch_max_bytes: int = Field(
+        default=200_000_000,
+        gt=0,
+        description="Batch mode: send a batch before its requests reach this size (API: 256 MB).",
+    )
     batch_max_wait_s: float = Field(
         default=30.0,
         gt=0,
