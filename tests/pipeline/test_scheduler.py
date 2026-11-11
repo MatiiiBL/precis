@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
+from precis.corpus.load import load_papers
 from precis.llm.fake import FakeReply
 from precis.models import RevisionResult, Stage, StageRecord, StageStatus
-from precis.pipeline import paper_result
 
 from .helpers import add_papers, brief_title, config, setup
 
@@ -41,11 +41,11 @@ async def test_full_run_reads_verifies_and_revises_what_failed() -> None:
     revision = RevisionResult.model_validate(revise.output)
     assert revision.summary.revision == 1
     assert revision.verification.revision == 1
-    result = paper_result(s.store, ids[0])
-    assert result is not None
+    # The corpus reads the revised summary as the paper's final one.
+    result = {p.id: p for p in load_papers(s.store)}[ids[0]]
     assert result.revised
-    assert result.first_verification is not None
-    assert result.first_verification.needs_revision()
+    assert result.draft_verification is not None
+    assert result.draft_verification.needs_revision()
     assert result.verification is not None
     assert not result.verification.needs_revision()
 
@@ -236,6 +236,6 @@ async def test_a_new_summary_marks_later_stages_pending() -> None:
         assert record.status is StageStatus.PENDING
         assert record.output is None
         assert record.error == "read changed"
-    result = paper_result(s.store, ids[0])
-    assert result is not None
+    [result] = load_papers(s.store)
     assert result.verification is None
+    assert not result.revised

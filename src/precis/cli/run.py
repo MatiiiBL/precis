@@ -15,10 +15,11 @@ from rich.console import Console
 from rich.table import Table
 
 from precis.config import Config
+from precis.corpus.load import load_papers
 from precis.llm import Gateway, UnpricedModelError, make_client
 from precis.models import Stage, StageStatus
 from precis.offline import offline_client
-from precis.pipeline import PIPELINE_STAGES, LiveProgress, Pipeline, paper_result
+from precis.pipeline import PIPELINE_STAGES, LiveProgress, Pipeline
 from precis.store import Store
 
 console = Console()
@@ -231,35 +232,29 @@ def export_command(
     ctx: typer.Context,
     out: Annotated[Path, typer.Option(help="JSON Lines file to write.")] = Path("summaries.jsonl"),
 ) -> None:
-    """Write every paper's final summary and verification as JSON Lines."""
+    """Write every paper's final summary and verification as JSON Lines, by paper id."""
     config = _config(ctx)
     store = Store(config.store_path)
-    written = 0
     try:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with out.open("w", encoding="utf-8") as f:
-            for meta in store.list_papers():
-                result = paper_result(store, meta.id)
-                if result is None:
-                    continue
-                verification = result.verification
-                record = {
-                    "paper": meta.model_dump(
-                        mode="json",
-                        include={"id", "title", "authors", "published", "primary_category", "url"},
-                    ),
-                    "summary": result.summary.model_dump(mode="json"),
-                    "verification": verification.model_dump(mode="json") if verification else None,
-                    "supported_fraction": verification.supported_fraction()
-                    if verification
-                    else None,
-                    "revised": result.revised,
-                }
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
-                written += 1
+        papers = load_papers(store)
     finally:
         store.close()
-    console.print(f"Wrote {written:,} summaries to {out}.")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as f:
+        for paper in papers:
+            verification = paper.verification
+            record = {
+                "paper": paper.meta.model_dump(
+                    mode="json",
+                    include={"id", "title", "authors", "published", "primary_category", "url"},
+                ),
+                "summary": paper.summary.model_dump(mode="json"),
+                "verification": verification.model_dump(mode="json") if verification else None,
+                "supported_fraction": verification.supported_fraction() if verification else None,
+                "revised": paper.revised,
+            }
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    console.print(f"Wrote {len(papers):,} summaries to {out}.")
 
 
 def register(app: typer.Typer) -> None:
