@@ -20,7 +20,6 @@ from rich.console import Console
 from rich.table import Table
 
 from precis.config import Config
-from precis.corpus import offline as corpus_offline
 from precis.corpus.load import PaperView, load_papers
 from precis.corpus.report import render_report
 from precis.corpus.site import SiteContent, build_site
@@ -32,10 +31,9 @@ from precis.corpus.synthesis import (
     write_report,
 )
 from precis.corpus.topics import TOPICS_ARTIFACT, TopicModel, build_topics
-from precis.eval import offline as eval_offline
 from precis.llm import AsyncAnthropicLike, Gateway, make_client
-from precis.llm.fake import FakeAnthropic
 from precis.models import CorpusReport
+from precis.offline import offline_client
 from precis.store import Store
 from precis.util import sha256_hex
 
@@ -58,10 +56,8 @@ def config_of(ctx: typer.Context) -> Config:
 
 
 def model_client(config: Config, *, offline: bool) -> AsyncAnthropicLike:
-    """The real SDK client, or an in-process fake that plays the corpus and judge roles."""
-    if offline:
-        return FakeAnthropic(responders=[*corpus_offline.RESPONDERS, *eval_offline.RESPONDERS])
-    return make_client(config)
+    """The real SDK client, or the offline client that plays every role."""
+    return offline_client() if offline else make_client(config)
 
 
 async def with_gateway[T](

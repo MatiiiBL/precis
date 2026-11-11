@@ -14,6 +14,8 @@ from typing import Any
 from anthropic.types import Message
 
 from precis.agents import offline as agents_offline
+from precis.corpus import offline as corpus_offline
+from precis.eval import offline as eval_offline
 from precis.llm import Clock
 from precis.llm.fake import FakeAnthropic, FakeReply, Responder
 
@@ -30,6 +32,8 @@ def from_messages(responder: Callable[[dict[str, Any]], Message | None]) -> Resp
 
 RESPONDERS: list[Responder] = [
     *(from_messages(r) for r in agents_offline.RESPONDERS),
+    *corpus_offline.RESPONDERS,
+    *eval_offline.RESPONDERS,
 ]
 """Every package's offline responders, in the order they are tried."""
 

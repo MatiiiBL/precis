@@ -31,8 +31,9 @@ class VirtualClock:
     sleeping task would wait forever, because nothing advances the clock.
     """
 
-    def __init__(self, start: float = 0.0) -> None:
+    def __init__(self, start: float = 0.0, *, resolution: float = 0.001) -> None:
         self._now = start
+        self.resolution = resolution
         self._sleepers: list[tuple[float, int, asyncio.Future[None]]] = []
         self._order = itertools.count()
         self.jumps = 0
@@ -41,11 +42,19 @@ class VirtualClock:
         return self._now
 
     async def sleep(self, seconds: float) -> None:
+        """Sleep for ``seconds``, rounded up to the clock's resolution.
+
+        Like a real event loop's timer granularity, the resolution keeps a
+        caller that waits for a tiny deficit (a token bucket a rounding
+        error short) from asking for a step smaller than the float spacing
+        of ``now``, which would leave the clock where it was and spin.
+        """
         if seconds <= 0:
             await asyncio.sleep(0)
             return
         future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        heapq.heappush(self._sleepers, (self._now + seconds, next(self._order), future))
+        wake_at = self._now + max(seconds, self.resolution)
+        heapq.heappush(self._sleepers, (wake_at, next(self._order), future))
         await future
 
     async def run[T](self, coro: Coroutine[Any, Any, T]) -> T:

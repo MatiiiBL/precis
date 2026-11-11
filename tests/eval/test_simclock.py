@@ -91,6 +91,21 @@ async def test_errors_and_cancellation_propagate() -> None:
     assert await clock.run(cancelled_sleeper()) == 2
 
 
+async def test_tiny_waits_still_move_time_forward() -> None:
+    # At t = 1e6 s the float spacing is ~1e-10 s: a wait of 1e-12 s would leave
+    # the clock where it was, and a caller polling for a deficit would spin.
+    clock = VirtualClock(start=1e6)
+
+    async def wait_for_deficit() -> int:
+        target, polls = 1e6 + 0.01, 0
+        while clock.now() < target:
+            await clock.sleep(1e-12)
+            polls += 1
+        return polls
+
+    assert await clock.run(wait_for_deficit()) == 10
+
+
 async def test_waiting_on_a_thread_is_not_a_deadlock() -> None:
     clock = VirtualClock()
 
