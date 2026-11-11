@@ -165,6 +165,7 @@ class Gateway:
             itpm=limits.itpm,
             otpm=limits.otpm,
             burst_s=limits.burst_s,
+            slow_start=limits.slow_start,
         )
         # Built in both modes: an online run also collects the results of
         # batches an earlier batch-mode run left open.

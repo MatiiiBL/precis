@@ -73,6 +73,11 @@ class LimitsConfig(Record):
 
     max_concurrency: int = Field(default=64, gt=0, description="Ceiling for adaptive concurrency.")
     initial_concurrency: int = Field(default=8, gt=0)
+    slow_start: bool = Field(
+        default=True,
+        description="Double the concurrency limit per window of successes until the first "
+        "429/529 or the ceiling, then grow it by one per window.",
+    )
     rpm: int | None = Field(default=None, description="Requests/min; None = learn from headers.")
     itpm: int | None = Field(default=None, description="Input tokens/min; None = learn.")
     otpm: int | None = Field(default=None, description="Output tokens/min; None = learn.")

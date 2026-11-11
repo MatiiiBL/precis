@@ -265,3 +265,79 @@ async def test_pause_holds_every_request() -> None:
     admission.pause(12)
     await admission.acquire(1, 1)
     assert clock.now() == pytest.approx(12)
+
+
+# ----------------------------------------------------------------------
+# slow start
+# ----------------------------------------------------------------------
+
+
+def test_slow_start_doubles_per_window_until_the_first_overload() -> None:
+    window = AIMDWindow(initial=4, maximum=64)
+    assert window.slow_start
+    for expected in (8, 16):
+        for _ in range(int(window.limit)):
+            window.release(window.admit(), Outcome.SUCCESS)
+        assert window.limit == expected
+    window.release(window.admit(), Outcome.OVERLOAD)
+    assert (window.limit, window.slow_start) == (8, False)
+    # From here on: one more slot per window of successes.
+    for _ in range(7):
+        window.release(window.admit(), Outcome.SUCCESS)
+    assert window.limit == 8
+    window.release(window.admit(), Outcome.SUCCESS)
+    assert window.limit == 9
+
+
+def test_slow_start_stops_at_the_ceiling() -> None:
+    window = AIMDWindow(initial=8, maximum=20)
+    for _ in range(100):
+        window.release(window.admit(), Outcome.SUCCESS)
+    assert window.limit == 20
+
+
+def test_slow_start_can_be_turned_off() -> None:
+    window = AIMDWindow(initial=8, maximum=64, slow_start=False)
+    for _ in range(8):
+        window.release(window.admit(), Outcome.SUCCESS)
+    assert window.limit == 9
+
+
+def test_other_failures_do_not_end_slow_start() -> None:
+    window = AIMDWindow(initial=4, maximum=64)
+    window.release(window.admit(), Outcome.FAILURE)
+    assert window.slow_start
+    assert window.limit == 4
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    initial=st.integers(1, 32),
+    maximum=st.integers(1, 64),
+    ops=st.lists(st.tuples(st.booleans(), st.sampled_from(list(Outcome))), max_size=300),
+)
+def test_growth_is_one_per_success_then_one_per_window(
+    initial: int, maximum: int, ops: list[tuple[bool, Outcome]]
+) -> None:
+    window = AIMDWindow(initial, maximum)
+    holders: list[int] = []
+    successes_since_change = 0
+    for admit, outcome in ops:
+        if admit and window.can_admit():
+            holders.append(window.admit())
+            continue
+        if not holders:
+            continue
+        before, was_slow = window.limit, window.slow_start
+        window.release(holders.pop(0), outcome)
+        if outcome is Outcome.SUCCESS:
+            successes_since_change += 1
+        if window.limit > before:
+            assert window.limit == before + 1
+            if not was_slow:
+                # Congestion avoidance: a whole window of successes per slot.
+                assert successes_since_change >= math.floor(before)
+            successes_since_change = 0
+        elif window.limit < before:
+            assert not window.slow_start
+            successes_since_change = 0

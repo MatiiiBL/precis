@@ -119,8 +119,9 @@ async def test_timeouts_and_server_errors_are_retried(store: Store, clock: Manua
 
     stats = gw.stats()
     assert (stats.timeouts, stats.server_errors, stats.retries) == (1, 1, 2)
-    # Neither says anything about capacity: concurrency is untouched.
-    assert stats.concurrency_limit == 8
+    # Neither says anything about capacity: the window is not cut, and the
+    # final success grows it by one (slow start).
+    assert stats.concurrency_limit == 9
 
 
 async def test_400_fails_immediately(fake: FakeAnthropic, store: Store, clock: ManualClock) -> None:

@@ -119,21 +119,28 @@ class Outcome(Enum):
 
 
 class AIMDWindow:
-    """Concurrency limit that grows by one per window of successes and halves on overload.
+    """Concurrency limit with TCP's slow start, then additive increase and halving.
 
-    A "window" is ``floor(limit)`` successful completions, roughly one round
-    trip of the whole in-flight set, as in TCP congestion avoidance. All
-    requests that were in flight when an overload arrived belong to the same
-    congestion event, so only the first of their overload signals halves
-    the limit; the epoch number tells them apart.
+    It starts in *slow start*: every success adds a slot, which doubles the
+    limit per window of successes, so a run reaches a high ceiling in a few
+    round trips instead of thousands of requests. The first overload (429
+    or 529) halves the limit and ends slow start for good; from then on the
+    limit grows by one per window of ``floor(limit)`` successes, roughly one
+    round trip of the whole in-flight set, as in TCP congestion avoidance.
+    All requests that were in flight when an overload arrived belong to the
+    same congestion event, so only the first of their overload signals
+    halves the limit; the epoch number tells them apart.
     """
 
-    def __init__(self, initial: int, maximum: int, minimum: int = 1) -> None:
+    def __init__(
+        self, initial: int, maximum: int, minimum: int = 1, *, slow_start: bool = True
+    ) -> None:
         if not 1 <= minimum <= maximum:
             raise ValueError("need 1 <= minimum <= maximum")
         self.minimum = minimum
         self.maximum = maximum
         self.limit = float(min(max(initial, minimum), maximum))
+        self.slow_start = slow_start
         self.in_flight = 0
         self.epoch = 0
         self._successes = 0
@@ -149,12 +156,16 @@ class AIMDWindow:
     def release(self, epoch: int, outcome: Outcome) -> None:
         self.in_flight -= 1
         if outcome is Outcome.SUCCESS:
+            if self.slow_start:
+                self.limit = min(self.maximum, self.limit + 1)
+                return
             self._successes += 1
             if self._successes >= math.floor(self.limit):
                 self._successes = 0
                 self.limit = min(self.maximum, self.limit + 1)
         elif outcome is Outcome.OVERLOAD and epoch == self.epoch:
             self.limit = max(float(self.minimum), float(math.floor(self.limit / 2)))
+            self.slow_start = False
             self.epoch += 1
             self._successes = 0
 
@@ -205,9 +216,10 @@ class Admission:
         itpm: float | None,
         otpm: float | None,
         burst_s: float,
+        slow_start: bool = True,
     ) -> None:
         self._clock = clock
-        self.window = AIMDWindow(initial_concurrency, max_concurrency)
+        self.window = AIMDWindow(initial_concurrency, max_concurrency, slow_start=slow_start)
         self.requests = TokenBucket(clock, rpm, burst_s=burst_s)
         self.input_tokens = TokenBucket(clock, itpm, burst_s=burst_s)
         self.output_tokens = TokenBucket(clock, otpm, burst_s=burst_s)
