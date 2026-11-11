@@ -106,6 +106,51 @@ class PipelineConfig(Record):
     )
 
 
+class CorpusConfig(Record):
+    """Topic modelling and report synthesis over the finished summaries."""
+
+    seed: int = Field(default=0, description="Seeds SVD and k-means, so topics are reproducible.")
+    k: int | None = Field(default=None, gt=0, description="Number of topics; None = silhouette.")
+    k_min: int = Field(default=6, ge=2, description="Smallest k tried by the silhouette search.")
+    k_max: int = Field(default=24, ge=2, description="Largest k tried by the silhouette search.")
+    svd_components: int = Field(default=100, gt=1, description="Dimensions kept by truncated SVD.")
+    central_papers: int = Field(
+        default=8, gt=0, description="Most central papers shown to the model that names a topic."
+    )
+    synthesis_input_tokens: int = Field(
+        default=60000,
+        ge=2000,
+        description="Most paper tokens in one synthesis request; larger topics are summarized "
+        "hierarchically.",
+    )
+
+
+class BenchConfig(Record):
+    """The simulated API that the offline throughput and fault benchmarks run against."""
+
+    papers: int = Field(default=2000, gt=0)
+    concurrency: list[int] = Field(
+        default=[4, 8, 16, 32, 64, 128], description="Concurrency ceilings to sweep."
+    )
+    rpm: int = Field(default=4000, gt=0, description="Simulated server limit, requests/min.")
+    itpm: int = Field(default=2_000_000, gt=0, description="Simulated input tokens/min.")
+    otpm: int = Field(default=400_000, gt=0, description="Simulated output tokens/min.")
+    time_scale: float = Field(
+        default=600.0, gt=0, description="Simulated seconds per real second (scaled clock)."
+    )
+    seed: int = 0
+
+
+class EvalConfig(Record):
+    """Quality evaluations and benchmarks."""
+
+    n: int = Field(default=50, gt=0, description="Papers sampled by eval abstract and ablation.")
+    seed: int = Field(default=0, description="Seeds the paper sample.")
+    results_dir: Path = Path("results")
+    figures_dir: Path = Path("docs/img")
+    bench: BenchConfig = BenchConfig()
+
+
 class Config(Record):
     store_path: Path = Path("data/precis.db")
     agents: AgentsConfig = AgentsConfig()
@@ -113,6 +158,8 @@ class Config(Record):
     budget: BudgetConfig = BudgetConfig()
     fetch: FetchConfig = FetchConfig()
     pipeline: PipelineConfig = PipelineConfig()
+    corpus: CorpusConfig = CorpusConfig()
+    eval: EvalConfig = EvalConfig()
 
 
 def load_config(path: Path | None = None) -> Config:
