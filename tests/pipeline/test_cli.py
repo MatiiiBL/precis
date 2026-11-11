@@ -112,7 +112,9 @@ def test_batch_mode_runs_offline_and_costs_less(store_path: Path) -> None:
 def test_budget_flag(store_path: Path) -> None:
     result = precis(store_path, "run", "--offline", "--max-cost", "0.05")
     assert result.exit_code == 0, result.output
-    assert "The budget was reached" in result.output
+    assert "The budget was reached: it caps the store's total spend" in result.output
+    help_text = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["run", "--help"]).output
+    assert "store's total recorded spend, over all runs" in help_text
 
 
 def test_bad_input(store_path: Path, tmp_path: Path) -> None:

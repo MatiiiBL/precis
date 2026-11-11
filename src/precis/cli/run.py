@@ -92,7 +92,12 @@ def run_command(
         Mode, typer.Option(help="online, or batch for the Message Batches API at half price.")
     ] = Mode.ONLINE,
     max_cost: Annotated[
-        float | None, typer.Option(min=0, help="Stop admitting papers at this spend, in USD.")
+        float | None,
+        typer.Option(
+            min=0,
+            help="Stop admitting papers once the store's total recorded spend, over all runs, "
+            "reaches this many USD.",
+        ),
     ] = None,
     offline: Annotated[
         bool, typer.Option(help="Answer every request with the deterministic offline client.")
@@ -171,7 +176,10 @@ def _print_run_summary(run_id: str, stats: dict[str, Any]) -> None:
             f"{revised['after']['supported_rate']:.1%} after."
         )
     if stats["budget_reached"]:
-        console.print("[yellow]The budget was reached; run again to finish the rest.[/yellow]")
+        console.print(
+            "[yellow]The budget was reached: it caps the store's total spend, so raise "
+            "--max-cost (or budget.max_cost_usd) to finish the rest.[/yellow]"
+        )
     if stats["interrupted"]:
         console.print(
             "[yellow]Interrupted; unfinished stages are pending for the next run.[/yellow]"
