@@ -1,9 +1,8 @@
-"""A sample paper, a scripted gateway and a search index for the agent tests."""
+"""A sample paper and a scripted gateway for the agent tests."""
 
 from __future__ import annotations
 
 import copy
-import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -95,38 +94,6 @@ def make_doc(paper_id: str = "2406.01234") -> Document:
 def agents_config(**overrides: Any) -> AgentsConfig:
     """Small pages, so that the design section spans two of them."""
     return AgentsConfig.model_validate({"page_tokens": 40, **overrides})
-
-
-# -- search ------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Hit:
-    id: str
-    section_id: str
-    text: str
-    score: float
-
-
-class KeywordIndex:
-    """Ranks sentences by shared words; a stand-in for the BM25 index."""
-
-    def __init__(self, doc: Document) -> None:
-        self.passages = [
-            (s.id, sentence)
-            for s in doc.sections
-            for sentence in re.split(r"(?<=\.)\s+", s.text)
-            if sentence
-        ]
-
-    def search(self, query: str, k: int) -> list[Hit]:
-        words = set(query.lower().split())
-        scored = [
-            (len(words & set(text.lower().split())), i, sid, text)
-            for i, (sid, text) in enumerate(self.passages)
-        ]
-        ranked = sorted((s for s in scored if s[0] > 0), key=lambda s: (-s[0], s[1]))
-        return [Hit(f"p{i}", sid, text, float(score)) for score, i, sid, text in ranked[:k]]
 
 
 # -- replies -----------------------------------------------------------------

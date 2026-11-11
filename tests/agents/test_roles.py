@@ -10,7 +10,6 @@ from precis.config import AgentConfig
 from precis.models import ClaimCheck, PaperSummary, Verdict, Verification
 
 from .helpers import (
-    KeywordIndex,
     ScriptedGateway,
     agents_config,
     call,
@@ -50,23 +49,18 @@ Run = Callable[[ScriptedGateway, dict[str, Any]], Awaitable[Any]]
 
 
 async def reader(gw: ScriptedGateway, overrides: dict[str, Any]) -> Any:
-    doc = make_doc()
     config = agents_config(reader=AgentConfig(**overrides))
-    return await run_reader(gw, make_meta(), doc, config, index=KeywordIndex(doc))
+    return await run_reader(gw, make_meta(), make_doc(), config)
 
 
 async def critic(gw: ScriptedGateway, overrides: dict[str, Any]) -> Any:
-    doc = make_doc()
     config = agents_config(critic=AgentConfig(**overrides))
-    return await run_critic(gw, make_meta(), doc, SUMMARY, config, index=KeywordIndex(doc))
+    return await run_critic(gw, make_meta(), make_doc(), SUMMARY, config)
 
 
 async def reviser(gw: ScriptedGateway, overrides: dict[str, Any]) -> Any:
-    doc = make_doc()
     config = agents_config(reviser=AgentConfig(**overrides))
-    return await run_reviser(
-        gw, make_meta(), doc, SUMMARY, VERIFICATION, config, index=KeywordIndex(doc)
-    )
+    return await run_reviser(gw, make_meta(), make_doc(), SUMMARY, VERIFICATION, config)
 
 
 ROLES = [

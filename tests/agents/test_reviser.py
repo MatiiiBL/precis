@@ -6,7 +6,6 @@ from precis.agents.reviser import run_reviser
 from precis.models import ClaimCheck, PaperSummary, Verdict, Verification
 
 from .helpers import (
-    KeywordIndex,
     ScriptedGateway,
     agents_config,
     call,
@@ -46,9 +45,7 @@ async def test_reviser_sees_the_failures_and_returns_revision_one() -> None:
         ]
     )
     doc = make_doc()
-    result = await run_reviser(
-        gw, make_meta(), doc, summary, verification, agents_config(), index=KeywordIndex(doc)
-    )
+    result = await run_reviser(gw, make_meta(), doc, summary, verification, agents_config())
     revised = result.value
     assert revised.revision == 1
     assert revised.paper_id == "2406.01234"

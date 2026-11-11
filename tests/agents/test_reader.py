@@ -11,7 +11,6 @@ from precis.models import PaperSummary
 from precis.util import canonical_json
 
 from .helpers import (
-    KeywordIndex,
     ScriptedGateway,
     agents_config,
     call,
@@ -29,7 +28,7 @@ SUBMIT = call("submit_summary", valid_draft(), "toolu_submit")
 
 async def read(gw: ScriptedGateway, **config: Any) -> Any:
     doc = make_doc()
-    return await run_reader(gw, make_meta(), doc, agents_config(**config), index=KeywordIndex(doc))
+    return await run_reader(gw, make_meta(), doc, agents_config(**config))
 
 
 async def test_happy_path_reads_then_submits() -> None:

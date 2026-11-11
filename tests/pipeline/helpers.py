@@ -73,29 +73,6 @@ def add_papers(store: Store, n: int, **titles: str) -> list[str]:
     return ids
 
 
-@dataclass(frozen=True)
-class Hit:
-    id: str
-    section_id: str
-    text: str
-    score: float
-
-
-class KeywordIndex:
-    """Ranks sentences by shared words; a stand-in for the BM25 index."""
-
-    def __init__(self, doc: Document) -> None:
-        self.passages = [
-            (s.id, t) for s in doc.sections for t in re.split(r"(?<=\.)\s+", s.text) if t
-        ]
-
-    def search(self, query: str, k: int) -> list[Hit]:
-        words = set(query.lower().split())
-        scored = [(len(words & set(t.lower().split())), sid, t) for sid, t in self.passages]
-        best = sorted((s for s in scored if s[0]), key=lambda s: -s[0])[:k]
-        return [Hit(f"p{n}", sid, t, float(score)) for n, (score, sid, t) in enumerate(best)]
-
-
 def config(**sections: dict[str, Any]) -> Config:
     base: dict[str, Any] = {"pipeline": {"fallbacks": False}}
     for name, values in sections.items():
@@ -113,7 +90,7 @@ class Setup:
         cfg = config or self.config
         clock = ManualClock()
         gateway = Gateway(self.fake, self.store, run_id=run_id, config=cfg, clock=clock)
-        return Pipeline(cfg, self.store, gateway, index_factory=KeywordIndex)
+        return Pipeline(cfg, self.store, gateway)
 
 
 def setup(*extra: Responder, cfg: Config | None = None) -> Setup:

@@ -13,7 +13,6 @@ from precis.llm.fake import FakeAnthropic
 from precis.util import estimate_tokens
 
 from .helpers import (
-    KeywordIndex,
     ScriptedGateway,
     agents_config,
     call,
@@ -131,7 +130,7 @@ async def test_dispatch_follows_the_configured_strategy() -> None:
     assert "tools" not in gw.requests[0]
 
     gw = ScriptedGateway([tool_turn(call("submit_summary", valid_draft()))])
-    await run_summarize(gw, make_meta(), doc, agents_config(), index=KeywordIndex(doc))
+    await run_summarize(gw, make_meta(), doc, agents_config())
     assert gw.requests[0]["tools"][0]["name"] == "read_section"
 
     refusal = message([], "refusal", stop_details={"type": "refusal", "category": None})

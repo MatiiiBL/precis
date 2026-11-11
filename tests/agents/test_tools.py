@@ -1,17 +1,17 @@
 import pytest
 
 from precis.agents.paper import PaperView
-from precis.agents.tools import ReadingTools
+from precis.agents.tools import ReadingTools, paper_index
 from precis.models import Caption
 
-from .helpers import DESIGN_1, DESIGN_2, KeywordIndex, make_doc, make_meta
+from .helpers import DESIGN_1, DESIGN_2, RESULTS, make_doc, make_meta
 
 
 @pytest.fixture
 def tools() -> ReadingTools:
     doc = make_doc()
     return ReadingTools(
-        PaperView(make_meta(), doc, page_tokens=40), KeywordIndex(doc), search_results=2
+        PaperView(make_meta(), doc, page_tokens=40), paper_index(doc), search_results=2
     )
 
 
@@ -66,7 +66,8 @@ def test_caption_ids_return_the_full_caption(tools: ReadingTools) -> None:
 def test_search(tools: ReadingTools) -> None:
     out = tools.run("search_paper", {"query": "IPC over Hawkeye"})
     assert out.text.startswith("2 passages for 'IPC over Hawkeye', best first:")
-    assert "1. [s4.2] Results\nIt improves IPC by 6.2%" in out.text
+    # A short section is a single BM25 passage.
+    assert f"1. [s4.2] Results\n{RESULTS}" in out.text
     assert out.text.endswith("read_section shows a passage in its context.")
     assert tools.run("search_paper", {"query": "  "}).is_error
     empty = tools.run("search_paper", {"query": "quantum"})
@@ -79,7 +80,7 @@ def test_captions_are_listed_and_shortened_when_long() -> None:
     long = Caption(id="tab2", kind="table", text="cell " * 2000)
     doc = doc.model_copy(update={"captions": [*doc.captions, long]})
     tools = ReadingTools(
-        PaperView(make_meta(), doc, page_tokens=1000), KeywordIndex(doc), search_results=2
+        PaperView(make_meta(), doc, page_tokens=1000), paper_index(doc), search_results=2
     )
     out = tools.run("read_captions", {})
     assert out.text.startswith("[fig1] (figure) Miss reduction over LRU")
@@ -88,7 +89,7 @@ def test_captions_are_listed_and_shortened_when_long() -> None:
     assert len(out.text) < 2000
     none = ReadingTools(
         PaperView(make_meta(), doc.model_copy(update={"captions": []}), page_tokens=40),
-        KeywordIndex(doc),
+        paper_index(doc),
         search_results=2,
     )
     assert none.run("read_captions", {}).text == "This paper has no figure or table captions."

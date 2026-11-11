@@ -8,7 +8,6 @@ from precis.agents.critic import QUOTE_NOT_FOUND, quotes_not_found, run_critic
 from precis.models import PaperSummary, Verdict
 
 from .helpers import (
-    KeywordIndex,
     ScriptedGateway,
     agents_config,
     call,
@@ -46,9 +45,7 @@ def submit(*checks: dict[str, Any]) -> Any:
 
 async def verify(gw: ScriptedGateway, **kwargs: Any) -> Any:
     doc = make_doc()
-    return await run_critic(
-        gw, make_meta(), doc, summary(), agents_config(), index=KeywordIndex(doc), **kwargs
-    )
+    return await run_critic(gw, make_meta(), doc, summary(), agents_config(), **kwargs)
 
 
 GOOD = (

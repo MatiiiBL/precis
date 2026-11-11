@@ -12,7 +12,7 @@ from precis.models import PaperMeta, PaperSummary, Verdict
 from precis.offline import offline_client
 from precis.store import Store
 
-from .helpers import KeywordIndex, agents_config, make_doc, make_meta
+from .helpers import agents_config, make_doc, make_meta
 
 # The offline reader makes a deliberate mistake on half of the titles (by
 # hash): it swaps two numbers in a finding, or rounds one in its first
@@ -31,8 +31,7 @@ def gateway() -> Gateway:
 
 
 async def summarize(gw: Gateway, meta: PaperMeta, **config: Any) -> tuple[PaperSummary, AgentTrace]:
-    doc = make_doc()
-    result = await run_summarize(gw, meta, doc, agents_config(**config), index=KeywordIndex(doc))
+    result = await run_summarize(gw, meta, make_doc(), agents_config(**config))
     return result.value, result.trace
 
 
@@ -61,19 +60,13 @@ async def test_verify_and_revise_repair_swapped_numbers(gateway: Gateway) -> Non
     config = agents_config()
     summary, _ = await summarize(gateway, meta)
     assert any("by 1.9% over LRU and by 6.2% over Hawkeye" in f.claim for f in summary.findings)
-    first = (await run_critic(gateway, meta, doc, summary, config, index=KeywordIndex(doc))).value
+    first = (await run_critic(gateway, meta, doc, summary, config)).value
     assert first.needs_revision()
     assert any(c.verdict is Verdict.CONTRADICTED for c in first.checks)
 
-    revised = (
-        await run_reviser(gateway, meta, doc, summary, first, config, index=KeywordIndex(doc))
-    ).value
+    revised = (await run_reviser(gateway, meta, doc, summary, first, config)).value
     assert revised.revision == 1
-    second = (
-        await run_critic(
-            gateway, meta, doc, revised, config, stage="revise", index=KeywordIndex(doc)
-        )
-    ).value
+    second = (await run_critic(gateway, meta, doc, revised, config, stage="revise")).value
     assert second.revision == 1
     assert not second.needs_revision()
     assert second.supported_fraction() > first.supported_fraction()
@@ -83,7 +76,7 @@ async def test_faithful_summary_passes_verification(gateway: Gateway) -> None:
     meta = make_meta(title=FAITHFUL)
     doc = make_doc()
     summary, _ = await summarize(gateway, meta)
-    result = await run_critic(gateway, meta, doc, summary, agents_config(), index=KeywordIndex(doc))
+    result = await run_critic(gateway, meta, doc, summary, agents_config())
     assert not result.value.needs_revision()
     assert result.trace.quotes_not_found == 0
 

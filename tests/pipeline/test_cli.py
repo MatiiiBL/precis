@@ -10,13 +10,12 @@ from precis.cli import app
 from precis.models import Stage, StageStatus
 from precis.store import Store
 
-from .helpers import KeywordIndex, add_papers
+from .helpers import add_papers
 
 
 @pytest.fixture
 def store_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.chdir(tmp_path)  # no precis.toml here
-    monkeypatch.setattr("precis.pipeline.scheduler.paper_index", KeywordIndex)
     path = tmp_path / "data" / "precis.db"
     store = Store(path)
     add_papers(store, 4)

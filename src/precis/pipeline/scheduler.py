@@ -21,7 +21,7 @@ import contextlib
 import logging
 import signal
 from collections import deque
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -49,8 +49,6 @@ from precis.store import Store
 
 log = logging.getLogger(__name__)
 
-IndexFactory = Callable[[Document], PassageIndex]
-
 _DOWNSTREAM = {Stage.READ: (Stage.VERIFY, Stage.REVISE), Stage.VERIFY: (Stage.REVISE,)}
 
 
@@ -66,7 +64,6 @@ class _StopPaper(Exception):
 class _Paper:
     meta: PaperMeta
     doc: Document
-    index_factory: IndexFactory
     summary: PaperSummary | None = None
     verification: Verification | None = None
     _index: PassageIndex | None = field(default=None, repr=False)
@@ -76,28 +73,22 @@ class _Paper:
         return self.meta.id
 
     def index(self) -> PassageIndex:
-        """Built on first use, so papers whose stages are all cached never build one."""
+        """The paper's search index, shared by its stages.
+
+        Built on first use, so papers whose stages are all cached never build one.
+        """
         if self._index is None:
-            self._index = self.index_factory(self.doc)
+            self._index = paper_index(self.doc)
         return self._index
 
 
 class Pipeline:
     """Runs the per-paper stages over many papers, resumably."""
 
-    def __init__(
-        self,
-        config: Config,
-        store: Store,
-        gateway: Gateway,
-        *,
-        index_factory: IndexFactory | None = None,
-    ) -> None:
-        """``index_factory`` builds a paper's search index; BM25 when not given."""
+    def __init__(self, config: Config, store: Store, gateway: Gateway) -> None:
         self.config = config
         self.store = store
         self.gateway = gateway
-        self.index_factory = index_factory or paper_index
         self.stats = RunStats(papers=0, stages=PIPELINE_STAGES)
         self._stopping = False
         self._workers: list[asyncio.Task[None]] = []
@@ -192,7 +183,7 @@ class Pipeline:
             )
             self.stats.papers_blocked += 1
             return
-        paper = _Paper(meta, doc, self.index_factory)
+        paper = _Paper(meta, doc)
         # Stages before the last requested one supply its inputs; later ones are not touched.
         needed = PIPELINE_STAGES[: max(PIPELINE_STAGES.index(s) for s in stages) + 1]
         try:
