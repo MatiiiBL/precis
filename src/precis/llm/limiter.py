@@ -3,9 +3,9 @@
 The Messages API limits each model by requests, input tokens and output
 tokens per minute, enforced with token buckets that refill continuously.
 ``Admission`` mirrors those three buckets on the client so requests wait
-here instead of collecting 429s, and bounds concurrency with an
-additive-increase / multiplicative-decrease window that backs off when the
-server signals overload (429 or 529) and probes upward while it does not.
+here instead of collecting 429s, and bounds concurrency with a window that,
+like TCP's, starts by doubling (slow start), then increases additively and
+halves when the server signals overload (429 or 529).
 
 The bucket and window classes are synchronous and read time from a
 ``Clock``, so their invariants can be checked exhaustively (see the

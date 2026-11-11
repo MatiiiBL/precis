@@ -133,16 +133,31 @@ is open. A 429's `retry-after` pauses all admissions for that long, not just
 the request that received it: the server's bucket is empty for everyone.
 
 **AIMD concurrency.** The buckets bound the rate; a separate window bounds
-how many requests are in flight. It starts at `initial_concurrency` (8),
-grows by one after each window of `floor(limit)` successful responses, and
-halves on a 429 or 529, at most once per congestion event (all requests that
-were in flight when the first overload arrived belong to the same event, as
-in TCP). Other failures (5xx, timeouts) say nothing about capacity and leave
-the window alone. Why not a fixed concurrency? The right number depends on
-latency, model and account, and changes during a run; a fixed setting is
-either too low (idle capacity) or too high (a 529 storm). The trade-off is
-throughput: halving means the window spends its time between half and all of
-the capacity.
+how many requests are in flight. It starts at `initial_concurrency` (8) in
+*slow start*, as TCP does: every successful response adds a slot, which
+doubles the window per round trip, until the first 429 or 529 (or the
+ceiling). That overload halves the window and ends slow start for good;
+from then on it grows by one after each window of `floor(limit)` successful
+responses and halves on a 429 or 529, at most once per congestion event
+(all requests that were in flight when the first overload arrived belong to
+the same event, as in TCP). Other failures (5xx, timeouts) say nothing about
+capacity and leave the window alone. Why not a fixed concurrency? The right
+number depends on latency, model and account, and changes during a run; a
+fixed setting is either too low (idle capacity) or too high (a 529 storm).
+The trade-off is throughput: halving means the window spends its time
+between half and all of the capacity.
+
+Slow start was added after the throughput benchmark
+(docs/evaluation.md section 6) showed the additive ramp to be the
+bottleneck: from 8, one slot per window needs about 8,000 successful
+requests to reach a ceiling of 128, most of a 2,000-paper run, so
+throughput flattened with a quarter of the input-token limit unused and no
+429 in sight. Doubling reaches any ceiling in a few round trips. It cannot
+overshoot the rate limits, because the token buckets, not the window, hold
+the request and token rates; against an overload threshold it overshoots by
+at most one doubling, once, and in practice by a slot or two, since a 529
+comes back in a fraction of the time a success takes. `limits.slow_start =
+false` restores the plain additive ramp.
 
 ![AIMD limit and requests in flight over ten simulated minutes against a server that answers 529 above 24 concurrent requests](img/runtime-aimd.png)
 
@@ -152,10 +167,12 @@ request arriving while more than 24 are in flight (64 closed-loop clients,
 
 | Concurrency control | Successful requests/min | Responses that were 529 | Mean in flight |
 |---|---|---|---|
-| AIMD (8 → 64 ceiling) | 244 | 0.5 % | 18.2 |
+| AIMD with slow start (8 → 64 ceiling) | 242 | 0.8 % | 18.4 |
 | Fixed at 64 | 309 | 52.2 % | 24.1 |
 
-A fixed window gets 27 % more through because the fake's overload answer is
+Slow start takes the window from 8 to the capacity in about ten seconds
+(the spike at the left of the figure) and stops at 25, one past the
+capacity, where the first 529 halves it. A fixed window gets 28 % more through because the fake's overload answer is
 nearly free (0.1 s) and retries land in the gaps; it does so by sending about
 one failed request per successful one. Against the real API, where an
 overloaded service is slow and every client's retries add to the load, the
@@ -369,25 +386,24 @@ output tokens each, ~4.5 s latency with 30 % log-normal jitter) against a
 fake with 600 RPM, 1.2M ITPM and 240K OTPM. Nothing is configured; every
 limit is learned from headers. At 450 s the fake halves its request limit.
 
-| Measure | Result |
-|---|---|
-| 429 responses | 0 of 6,141 |
-| Requests/min, 240-450 s (window settled) | 604 of 600 |
-| Requests/min, 60-450 s (includes the ramp) | 557 |
-| Input / output tokens/min, 240-450 s | 605K / 181K |
-| Time for the window to grow from 8 to 45 (enough for 600 RPM) | 175 s |
-| New 300 RPM limit adopted after the change | 1.2 s (the next response) |
-| 30-s windows after the change | mean 300 RPM, max 312 RPM, 0 429s |
-| Failed requests | 0 |
+| Measure | Slow start (default) | Additive only (`slow_start = false`) |
+|---|---|---|
+| Time for the window to grow from 8 to 45 (enough for 600 RPM) | 14 s | 175 s |
+| Requests/min, 60-450 s | 600 of 600 | 558 of 600 |
+| 429 responses | 0 of 6,836 | 0 |
+| Requests/min, 240-450 s (window settled) | 600 of 600 | |
+| Input / output tokens/min, 240-450 s | 601K / 180K | |
+| New 300 RPM limit adopted after the change | 1.3 s (the next response) | |
+| 30-s windows after the change | mean 300 RPM, max 316 RPM, 0 429s | |
+| Failed requests | 0 | 0 |
 
-(Every request in this run is streamed; the numbers match the earlier
-non-streaming run to within scheduling jitter.) The client runs at the
-limit without a single 429 because it reads the limit from the first
-response and spends its burst conservatively; the 0.7 % over in steady
-state is the 10-second burst spent on top of the refill,
-which the server's full-minute bucket absorbs. The slow part is the
-additive increase from the initial window: raising `initial_concurrency`
-shortens the ramp at the risk of an early overload burst.
+(The second run stops at 450 s; it only shows the ramp.) The client runs
+at the limit without a single 429 because it reads the limit from the
+first response and spends its burst conservatively: once the window is
+large enough, the request bucket, not the window, sets the rate. With slow
+start the window gets there in three round trips instead of three minutes,
+which is the whole difference between 558 and 600 requests per minute
+over the first 450 seconds.
 
 ## Limitations
 

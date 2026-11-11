@@ -183,6 +183,19 @@ async def _measure() -> None:
     )
     print(f"  failures: {r.failures}")
 
+    print("The same run without slow start (one slot per window from 8)")
+    r = await simulate(
+        duration_s=450,
+        clients=64,
+        speed=100,
+        limits=limits,
+        gateway_limits={"max_concurrency": 64, "slow_start": False},
+    )
+    ramp = next(s.t for s in r.samples if s.limit >= 45)
+    print(f"  concurrency reached 45 at {ramp:.0f}s")
+    print(f"  60-450s: {r.rate_per_min(60.0, 450.0):.0f} requests/min of 600")
+    print(f"  429s: {r.count('429')}")
+
     print("Overload run: 529 above 24 concurrent requests, no rate limits")
     for name, fixed in (("AIMD", None), ("fixed 64", 64)):
         r = await simulate(

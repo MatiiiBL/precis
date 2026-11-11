@@ -168,8 +168,9 @@ The gateway adds the cross-cutting parts:
    crash during that attempt still resumes from its own cache. The empty
    salt is the plain hash above.
 2. **Admission.** A request waits for (a) a concurrency slot under an AIMD
-   limit (start at `limits.initial_concurrency`, +1 per window of successes up
-   to `limits.max_concurrency`, halve on 429/529), and (b) token-bucket
+   limit (start at `limits.initial_concurrency` in slow start, doubling per
+   window of successes until the first 429/529; then halve on 429/529 and
+   +1 per window of successes, up to `limits.max_concurrency`), and (b) token-bucket
    capacity for requests, input tokens and output tokens per minute. Buckets
    use the configured limits, or learn them from the
    `anthropic-ratelimit-*` response headers when a limit is `None`. Input is
