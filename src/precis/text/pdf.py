@@ -133,6 +133,7 @@ class PdfFrontMatter:
     """What a PDF says about itself, for papers that have no arXiv metadata."""
 
     title: str | None
+    authors: list[str]
     abstract: str
     license: str | None
     created: date | None
@@ -208,6 +209,7 @@ def read_pdf(data: bytes, paper_id: str) -> tuple[Document, PdfFrontMatter]:
     license_url = metadata.get("/License")
     front = PdfFrontMatter(
         title=title,
+        authors=_metadata_authors(metadata.get("/Author")),
         abstract=_abstract(front_lines),
         license=str(license_url) if license_url else None,
         created=_creation_date(reader),
@@ -324,6 +326,14 @@ def _creation_date(reader: PdfReader) -> date | None:
     except (ValueError, TypeError):  # malformed "D:..." strings are common
         return None
     return created.date() if created else None
+
+
+def _metadata_authors(value: object) -> list[str]:
+    """``/Author`` as a list: arXiv writes "A; B; C", other tools "A, B and C"."""
+    if not isinstance(value, str) or not value.strip():
+        return []
+    separator = r";" if ";" in value else r",|\band\b"
+    return [name for name in (squash(n) for n in re.split(separator, value)) if name]
 
 
 def _metadata_title(value: object) -> str | None:

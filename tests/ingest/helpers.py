@@ -163,7 +163,7 @@ def atom_feed(entries: Sequence[str], *, total: int, start: int = 0) -> bytes:
     ).encode()
 
 
-def paper_pdf(marker: str = "BODY") -> bytes:
+def paper_pdf(marker: str = "BODY", **info: str) -> bytes:
     """A small but complete paper as a PDF: passes the quality gate."""
     lines: list[PdfLine] = [("A Synthetic Paper", 16.0), "Abstract", "An abstract."]
     for number, title in enumerate(("Introduction", "Design", "Evaluation", "Conclusion"), 1):
@@ -175,7 +175,7 @@ def paper_pdf(marker: str = "BODY") -> bytes:
             lines.append(f"blocks for {title.lower()} number {n} while the memory system is busy.")
     lines += ["References", "[1] A. Smith. Caches. 2020."]
     pages = [lines[i : i + 45] for i in range(0, len(lines), 45)]
-    return make_pdf(pages, info={"License": "http://creativecommons.org/licenses/by/4.0/"})
+    return make_pdf(pages, info={"License": "http://creativecommons.org/licenses/by/4.0/", **info})
 
 
 def paper_html(marker: str = "BODY") -> bytes:
