@@ -82,7 +82,11 @@ class LimitsConfig(Record):
         description="Seconds of each per-minute limit that may be sent in one burst.",
     )
     max_attempts: int = Field(default=8, gt=0)
-    request_timeout_s: float = Field(default=600.0, gt=0)
+    request_timeout_s: float = Field(
+        default=600.0,
+        gt=0,
+        description="Seconds a streamed request may go without data before it times out.",
+    )
     backoff_base_s: float = Field(
         default=1.0, gt=0, description="First retry waits up to this long (full jitter)."
     )
@@ -103,7 +107,13 @@ class LimitsConfig(Record):
 
 class BudgetConfig(Record):
     max_cost_usd: float | None = Field(
-        default=None, description="Stop admitting new work once spend reaches this; None = no cap."
+        default=None,
+        description=(
+            "Cap on the total spend recorded in the store, earlier runs included: a request "
+            "is refused when its reservation would cross it. Replies longer than their "
+            "reservation can overshoot by up to about max_concurrency x max_tokens x the "
+            "output price. None = no cap."
+        ),
     )
 
 

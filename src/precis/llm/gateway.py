@@ -116,6 +116,8 @@ class _Estimate:
     input_tokens: int
     output_tokens: int
     cost_usd: float
+    """What the budget reserves: the uncached input at the request's
+    cache-write rate and the largest output this stage has produced."""
 
 
 @dataclass
@@ -169,7 +171,9 @@ class Gateway:
         )
         self._counters = _Counters()
         self._reserved_usd = 0.0
+        self._spent_before_usd = sum(row.cost_usd for row in store.usage())
         self._output_avg: dict[str, float] = {}
+        self._output_max: dict[str, int] = {}
         self._input_ratio: dict[str, float] = {}
 
     @property
@@ -182,7 +186,13 @@ class Gateway:
 
     @property
     def spent_usd(self) -> float:
+        """What this gateway has spent (this run)."""
         return self._counters.cost_usd
+
+    @property
+    def total_spent_usd(self) -> float:
+        """Everything recorded in the store, earlier runs included: what the budget caps."""
+        return self._spent_before_usd + self._counters.cost_usd
 
     def stats(self) -> GatewayStats:
         c = self._counters
@@ -255,7 +265,7 @@ class Gateway:
                     return reply
 
         estimate = self._estimate(params, stage)
-        self._check_budget(estimate)
+        self._check_budget(estimate, params)
         self._reserved_usd += estimate.cost_usd
         try:
             if self._batches is None:
@@ -328,26 +338,46 @@ class Gateway:
         output_tokens = max(
             1, min(max_tokens, round(self._output_avg.get(stage, _DEFAULT_OUTPUT_TOKENS)))
         )
+        # The budget reserves more than the rate limiter: until a stage has
+        # produced a reply, a request may use all of its max_tokens.
+        output_bound = min(max_tokens, self._output_max.get(stage, max_tokens))
         usd = estimate_cost(
             str(params["model"]),
             input_tokens,
-            output_tokens,
+            output_bound,
             cache_read_tokens=prompt_tokens - input_tokens,
+            cache_write_ttl=_cache_write_ttl(params),
             batch=self._mode == "batch",
         )
         return _Estimate(prompt_tokens, input_tokens, output_tokens, usd)
 
-    def _check_budget(self, estimate: _Estimate) -> None:
+    def _check_budget(self, estimate: _Estimate, params: dict[str, Any]) -> None:
+        """Refuse a request whose reservation would take the store's total spend past the cap.
+
+        Reservations of requests in flight count too, so a burst of
+        concurrent requests cannot all pass the check at once. The cap can
+        still be overshot by replies longer than their reservation; at
+        worst every request in flight writes its whole ``max_tokens``, about
+        ``max_concurrency * max_tokens * output price``.
+        """
         budget = self._config.budget.max_cost_usd
         if budget is None:
             return
-        projected = self._counters.cost_usd + self._reserved_usd + estimate.cost_usd
-        if projected > budget:
+        spent = self.total_spent_usd
+        if spent + self._reserved_usd + estimate.cost_usd <= budget:
+            return
+        if self._reserved_usd == 0 and spent + estimate.cost_usd > budget:
+            # Nothing in flight will free up room: not even one request fits.
             raise BudgetExceeded(
-                f"spent ${self._counters.cost_usd:.4f} (+${self._reserved_usd:.4f} in flight); "
-                f"this request (~${estimate.cost_usd:.4f}) would cross the "
-                f"${budget:.2f} budget"
+                f"the ${budget:.2f} budget leaves ${max(0.0, budget - spent):.4f} after "
+                f"${spent:.4f} already spent, too small for one {params.get('model')} request "
+                f"at max_tokens={params.get('max_tokens')} (up to ${estimate.cost_usd:.4f})"
             )
+        raise BudgetExceeded(
+            f"spent ${spent:.4f} in total (+${self._reserved_usd:.4f} reserved in flight); "
+            f"this request (up to ${estimate.cost_usd:.4f}) would cross the "
+            f"${budget:.2f} budget"
+        )
 
     def _learn(self, stage: str, estimate: _Estimate, reply: Reply) -> None:
         """Update the per-stage output average and the counted-input ratio.
@@ -361,6 +391,7 @@ class Gateway:
         ratio = counted / estimate.prompt_tokens
         self._input_ratio[stage] = _ewma(self._input_ratio.get(stage), ratio)
         self._output_avg[stage] = _ewma(self._output_avg.get(stage), usage.output_tokens)
+        self._output_max[stage] = max(self._output_max.get(stage, 0), usage.output_tokens)
 
     # ------------------------------------------------------------------
     # online requests
@@ -580,6 +611,32 @@ async def _stream[T](manager: MessageStreamManagerLike[T]) -> tuple[T, dict[str,
         except anthropic.APITimeoutError:
             log.warning("request %s timed out mid-stream", headers.get("request-id"))
             raise
+
+
+def _cache_write_ttl(params: dict[str, Any]) -> Literal["5m", "1h"] | None:
+    """The longest cache lifetime a request writes with, or ``None`` if it sets no breakpoint."""
+    controls = [params.get("cache_control")]
+    for block in (*(params.get("tools") or []), *_system_blocks(params), *_message_blocks(params)):
+        if isinstance(block, dict):
+            controls.append(block.get("cache_control"))
+    ttls = [c.get("ttl", "5m") for c in controls if isinstance(c, dict)]
+    if not ttls:
+        return None
+    return "1h" if "1h" in ttls else "5m"
+
+
+def _system_blocks(params: dict[str, Any]) -> list[Any]:
+    system = params.get("system")
+    return list(system) if isinstance(system, list) else []
+
+
+def _message_blocks(params: dict[str, Any]) -> list[Any]:
+    blocks: list[Any] = []
+    for message in params.get("messages") or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, list):
+            blocks.extend(content)
+    return blocks
 
 
 def request_hash_of(params: dict[str, Any], salt: str = "") -> str:

@@ -183,9 +183,11 @@ async def test_budget_counts_the_estimate_of_the_next_request(
 ) -> None:
     gw = gateway(fake, store, clock, budget={"max_cost_usd": 0.001})
     # 2,000 output tokens of claude-opus-5-5 could cost up to $0.04.
-    with pytest.raises(BudgetExceeded):
+    with pytest.raises(BudgetExceeded) as excinfo:
         await gw.create(request(max_tokens=2000), stage="read")
     assert fake.requests == []
+    message = str(excinfo.value)
+    assert "too small for one claude-opus-5-5 request at max_tokens=2000" in message
 
 
 async def test_refusal_raises_with_category(store: Store, clock: ManualClock) -> None:
@@ -425,3 +427,52 @@ async def test_timeouts_are_retried_at_most_once(
     assert gw.stats().timeouts == 2
     # The attempt that timed out after the response started names its request.
     assert "req_fake_" in caplog.text
+
+
+# ----------------------------------------------------------------------
+# budget (review R5)
+# ----------------------------------------------------------------------
+
+
+async def test_budget_caps_the_spend_recorded_in_the_store(
+    fake: FakeAnthropic, store: Store, clock: ManualClock
+) -> None:
+    earlier = gateway(fake, store, clock)
+    await earlier.create(request("earlier run", max_tokens=50), stage="read")
+    spent_before = sum(row.cost_usd for row in store.usage())
+
+    later = gateway(fake, store, clock, budget={"max_cost_usd": spent_before * 1.01})
+    assert later.total_spent_usd == pytest.approx(spent_before)
+    assert later.spent_usd == 0
+    with pytest.raises(BudgetExceeded):
+        await later.create(request("this run", max_tokens=50), stage="read")
+    assert len(fake.requests) == 1
+
+
+async def test_budget_reserves_input_at_the_cache_write_rate(
+    fake: FakeAnthropic, store: Store, clock: ManualClock
+) -> None:
+    # ~10,000 prompt tokens: $0.04 as plain input, $0.08 as 1-hour cache writes.
+    text = "x" * 40_000
+    gw = gateway(fake, store, clock, budget={"max_cost_usd": 0.06})
+    with pytest.raises(BudgetExceeded):
+        await gw.create(
+            request(text, max_tokens=1, cache_control={"type": "ephemeral", "ttl": "1h"}),
+            stage="read",
+        )
+    await gw.create(request(text, max_tokens=1), stage="read")
+    assert len(fake.requests) == 1
+
+
+async def test_budget_reserves_output_up_to_the_largest_reply_seen(
+    fake: FakeAnthropic, store: Store, clock: ManualClock
+) -> None:
+    gw = gateway(fake, store, clock, budget={"max_cost_usd": 0.3})
+    # Nothing seen yet in this stage: reserve all 16,000 tokens ($0.32).
+    with pytest.raises(BudgetExceeded):
+        await gw.create(request("first", max_tokens=16_000), stage="read")
+    await gw.create(request("small", max_tokens=100), stage="read")
+    # Now replies in this stage are known to be short.
+    await gw.create(request("second", max_tokens=16_000), stage="read")
+    with pytest.raises(BudgetExceeded):
+        await gw.create(request("other stage", max_tokens=16_000), stage="verify")

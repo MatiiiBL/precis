@@ -160,7 +160,16 @@ async def test_refusals_are_recorded_as_refused() -> None:
 
 
 async def test_budget_stops_admission_and_leaves_work_pending() -> None:
-    s = setup(cfg=config(budget={"max_cost_usd": 0.15}, pipeline={"max_papers_in_flight": 2}))
+    # The first request of a stage reserves its whole max_tokens, so keep it
+    # small enough for this budget to admit some papers before it stops.
+    small = {"max_tokens": 2000}
+    s = setup(
+        cfg=config(
+            budget={"max_cost_usd": 0.15},
+            agents={"reader": small, "critic": small, "reviser": small},
+            pipeline={"max_papers_in_flight": 2},
+        )
+    )
     ids = add_papers(s.store, 8)
     stats = await s.pipeline("run-1").run(ids, ALL)
     assert stats["budget_reached"] is True

@@ -19,7 +19,7 @@ the higher tier for all of its tokens.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 from anthropic.types.beta import BetaUsage
 
@@ -168,12 +168,21 @@ def estimate_cost(
     output_tokens: int,
     *,
     cache_read_tokens: int = 0,
+    cache_write_ttl: Literal["5m", "1h"] | None = None,
     batch: bool = False,
 ) -> float:
-    """Expected cost of a request before it is sent, from token estimates."""
+    """Expected cost of a request before it is sent, from token estimates.
+
+    With ``cache_write_ttl`` the uncached input is priced as cache writes of
+    that lifetime, which is what a request with a ``cache_control``
+    breakpoint pays for the part of its prompt that is not read from cache.
+    """
     price = pricing(model).for_prompt(input_tokens + cache_read_tokens)
+    input_rate = {None: price.input, "5m": price.cache_write_5m, "1h": price.cache_write_1h}[
+        cache_write_ttl
+    ]
     usd = (
-        input_tokens * price.input
+        input_tokens * input_rate
         + cache_read_tokens * price.cache_read
         + output_tokens * price.output
     ) / 1_000_000
