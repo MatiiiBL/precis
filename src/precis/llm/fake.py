@@ -255,7 +255,13 @@ class FakeAnthropic:
         )
 
     def count(self, outcome: str) -> int:
+        """How many requests ended with ``outcome`` ("ok", "429", "529", ...)."""
         return sum(e.outcome == outcome for e in self.events)
+
+    @property
+    def batch_sizes(self) -> list[int]:
+        """Number of requests in each batch created so far, in creation order."""
+        return [len(b.requests) for b in self._batches.values()]
 
     # ------------------------------------------------------------------
     # the request path

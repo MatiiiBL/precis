@@ -23,6 +23,7 @@ from anthropic.types.beta import BetaMessage
 
 from precis.config import Config
 from precis.llm.base import Reply
+from precis.llm.batch import BatchQueue
 from precis.llm.client import AsyncAnthropicLike
 from precis.llm.clock import Clock, RealClock
 from precis.llm.errors import BudgetExceeded, GatewayError, RefusalError
@@ -130,8 +131,6 @@ class Gateway:
         of its fallback targets) with no price: running it would record
         calls as free.
         """
-        if mode != "online":
-            raise NotImplementedError("batch mode is not available yet")
         self._client = client
         self._store = store
         self._run_id = run_id
@@ -149,6 +148,9 @@ class Gateway:
             itpm=limits.itpm,
             otpm=limits.otpm,
             burst_s=limits.burst_s,
+        )
+        self._batches = (
+            BatchQueue(client, self._clock, limits, self._rng) if mode == "batch" else None
         )
         self._counters = _Counters()
         self._reserved_usd = 0.0
@@ -169,9 +171,10 @@ class Gateway:
 
     def stats(self) -> GatewayStats:
         c = self._counters
+        batches = self._batches
         return GatewayStats(
-            in_flight=self._admission.in_flight,
-            queued=self._admission.queued,
+            in_flight=self._admission.in_flight + (batches.in_batches if batches else 0),
+            queued=self._admission.queued + (batches.queued if batches else 0),
             concurrency_limit=self._admission.concurrency_limit,
             calls=c.calls,
             cached_calls=c.cached_calls,
@@ -184,7 +187,7 @@ class Gateway:
             cache_creation_input_tokens=c.cache_creation_input_tokens,
             cache_read_input_tokens=c.cache_read_input_tokens,
             cost_usd=c.cost_usd,
-            batches_pending=0,
+            batches_pending=batches.batches_pending if batches else 0,
             refusals=c.refusals,
             server_errors=c.server_errors,
             timeouts=c.timeouts,
@@ -195,7 +198,9 @@ class Gateway:
         )
 
     async def aclose(self) -> None:
-        """Wait for outstanding work; in online mode there is none to wait for."""
+        """Send any queued batch requests and wait for every pending batch to finish."""
+        if self._batches is not None:
+            await self._batches.aclose()
 
     async def create(
         self, params: dict[str, Any], *, stage: str, paper_id: str | None = None
@@ -219,7 +224,13 @@ class Gateway:
         self._check_budget(estimate)
         self._reserved_usd += estimate.cost_usd
         try:
-            response = await self._send_online(params, estimate)
+            if self._batches is None:
+                response = await self._send_online(params, estimate)
+            else:
+                result = await self._batches.submit(params)
+                response = _Response(
+                    result.message, result.attempts, result.latency_s, None, batch=True
+                )
         except GatewayError as e:
             self._counters.errors += 1
             self._record_failure(model, request_hash, stage, paper_id, started_at, e)
