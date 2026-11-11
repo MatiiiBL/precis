@@ -507,9 +507,7 @@ class Gateway:
 
     def _models_in_use(self) -> set[str]:
         agents = self._config.agents
-        models = {
-            role.model for role in (agents.reader, agents.critic, agents.synthesizer, agents.judge)
-        }
+        models = {role.model for role in agents.roles().values()}
         if self._config.pipeline.fallbacks:
             for model in list(models):
                 models.update(FALLBACK_TARGETS.get(model, ()))

@@ -63,6 +63,10 @@ class AgentsConfig(Record):
         "but survive longer gaps between turns.",
     )
 
+    def roles(self) -> dict[str, AgentConfig]:
+        """Every model role, by name, so checks over all roles cannot miss a new one."""
+        return {name: value for name, value in self if isinstance(value, AgentConfig)}
+
 
 class LimitsConfig(Record):
     """Client-side admission control, retries and batching for the Messages API."""

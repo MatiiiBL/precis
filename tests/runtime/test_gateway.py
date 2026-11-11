@@ -236,11 +236,12 @@ async def test_fallbacks_are_not_sent_for_models_without_them(
     assert "fallbacks" not in fake.requests[0]
 
 
+@pytest.mark.parametrize("role", ["reader", "critic", "reviser", "synthesizer", "judge"])
 def test_unpriced_model_is_a_configuration_error(
-    fake: FakeAnthropic, store: Store, clock: ManualClock
+    fake: FakeAnthropic, store: Store, clock: ManualClock, role: str
 ) -> None:
     with pytest.raises(UnpricedModelError, match="claude-unknown"):
-        gateway(fake, store, clock, agents={"reader": {"model": "claude-unknown"}})
+        gateway(fake, store, clock, agents={role: {"model": "claude-unknown"}})
 
 
 async def test_concurrency_grows_back_to_the_ceiling(store: Store, clock: ManualClock) -> None:
