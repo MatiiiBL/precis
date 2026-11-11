@@ -4,16 +4,17 @@ from precis.eval.faithfulness import (
     audit_quotes,
     evaluate_faithfulness,
     faithfulness_markdown,
-    quote_found,
     revision_examples,
 )
 from precis.models import Caption, Document, Section, Verdict
 
 S, P, U, C = Verdict.SUPPORTED, Verdict.PARTIAL, Verdict.UNSUPPORTED, Verdict.CONTRADICTED
 
+# An en dash and a non-breaking hyphen, which a quote may give as "-".
+EN_DASH, NB_HYPHEN = chr(0x2013), chr(0x2011)
 TEXT = (
     "Our learned policy improves the hit rate by 7.2%\nover LRU on SPEC CPU2017. "
-    "It costs “only” 3 KB of state."
+    f"It gains 5{EN_DASH}7% on the 64{NB_HYPHEN}core system."
 )
 
 
@@ -28,13 +29,18 @@ def _doc(paper_id: str) -> Document:
     )
 
 
-def test_quotes_match_despite_wrapping_case_and_typography() -> None:
-    text = " ".join(TEXT.casefold().split()).replace("“", '"').replace("”", '"')
-    assert quote_found("improves the hit rate by 7.2% over LRU", text)
-    assert quote_found('"It costs "only" 3 KB of state."', text)
-    assert quote_found("Our learned policy ... over LRU on SPEC CPU2017", text)
-    assert not quote_found("improves the hit rate by 9%", text)
-    assert not quote_found("...", text)
+def test_audit_matches_quotes_like_the_critic() -> None:
+    quotes = [
+        "improves the hit rate by 7.2% over LRU",  # across a line break
+        "5-7% on the 64-core system",  # ASCII dashes for typographic ones
+        "Our learned policy ... over LRU on SPEC CPU2017",  # an elision
+        "improves the hit rate by 9%",  # not in the paper
+        "Results",  # a section title is not body text
+    ]
+    view = _view_with_evidence("p1", quotes[:3], [S, S, S])
+    assert audit_quotes([view], {"p1": _doc("p1")}).not_found == 0
+    view = _view_with_evidence("p1", ["x", *quotes[3:]], [S, S, S])
+    assert audit_quotes([view], {"p1": _doc("p1")}).not_found == 3
 
 
 def _view_with_evidence(

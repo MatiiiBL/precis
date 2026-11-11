@@ -5,45 +5,24 @@ critic's verdicts are counted per claim before and after revision, and its
 evidence is audited: every check must quote the paper verbatim, so a quote
 that cannot be found in the paper's text is a sign that the critic itself
 hallucinated, and a verdict resting on it is not trustworthy.
+
+Quotes are matched with the critic's own matcher
+(``precis.agents.paper.PaperView.contains_quote``), so the audit counts
+exactly the quotes the critic's check would reject.
 """
 
 from __future__ import annotations
 
-import re
-import unicodedata
 from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel
 
+from precis.agents.paper import PaperView
+from precis.config import AgentsConfig
 from precis.corpus.load import FinishedPaper
 from precis.corpus.stats import VerdictCounts, faithfulness
 from precis.eval.results import markdown_table
 from precis.models import ClaimCheck, Document, PaperSummary, Verdict
-
-_ELLIPSIS = re.compile(r"\s*(?:\.\.\.|…|\[\.\.\.\])\s*")
-# Curly double and single quotes, by code point so they are unambiguous here.
-_STRAIGHT_QUOTES = str.maketrans(
-    {chr(0x201C): '"', chr(0x201D): '"', chr(0x2018): "'", chr(0x2019): "'"}
-)
-
-
-def normalize(text: str) -> str:
-    """Fold case, Unicode forms and whitespace, so a quote matches despite
-    re-wrapped lines, ligatures or curly quotes."""
-    text = unicodedata.normalize("NFKC", text).casefold().translate(_STRAIGHT_QUOTES)
-    return " ".join(text.split())
-
-
-def document_text(doc: Document) -> str:
-    parts = [s.title + " " + s.text for s in doc.sections] + [c.text for c in doc.captions]
-    return normalize(" ".join(parts))
-
-
-def quote_found(quote: str, normalized_text: str) -> bool:
-    """Whether every fragment of ``quote`` (split at ellipses) occurs in the text."""
-    fragments = [normalize(f).strip("\"' ") for f in _ELLIPSIS.split(quote)]
-    fragments = [f for f in fragments if f]
-    return bool(fragments) and all(f in normalized_text for f in fragments)
 
 
 class QuoteAudit(BaseModel):
@@ -65,11 +44,12 @@ class QuoteAudit(BaseModel):
 def audit_quotes(papers: Sequence[FinishedPaper], documents: Mapping[str, Document]) -> QuoteAudit:
     """Audit the evidence of every check (first drafts and revisions)."""
     checks = empty = missing = missing_supported = 0
+    page_tokens = AgentsConfig().page_tokens  # paging plays no part in matching
     for paper in papers:
         doc = documents.get(paper.id)
         if doc is None:
             continue
-        text = document_text(doc)
+        view = PaperView(paper.meta, doc, page_tokens=page_tokens)
         verifications = [paper.draft_verification]
         if paper.revised:
             verifications.append(paper.verification)
@@ -78,7 +58,7 @@ def audit_quotes(papers: Sequence[FinishedPaper], documents: Mapping[str, Docume
                 checks += 1
                 if not check.evidence.strip():
                     empty += 1
-                elif not quote_found(check.evidence, text):
+                elif not view.contains_quote(check.evidence):
                     missing += 1
                     missing_supported += check.verdict is Verdict.SUPPORTED
     return QuoteAudit(
