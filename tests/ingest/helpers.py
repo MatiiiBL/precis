@@ -120,6 +120,73 @@ def para(*paragraphs: str) -> str:
     return f'<div class="ltx_para">{inner}</div>'
 
 
+def atom_entry(
+    paper_id: str,
+    version: int = 1,
+    *,
+    published: str = "2025-07-01T10:00:00Z",
+    updated: str | None = None,
+    categories: Sequence[str] = ("cs.AR",),
+    title: str | None = None,
+) -> str:
+    """One ``<entry>`` as the arXiv API writes it."""
+    cats = "".join(
+        f'<category term="{c}" scheme="http://arxiv.org/schemas/atom"/>' for c in categories
+    )
+    versioned = f"{paper_id}v{version}"
+    return (
+        f"<entry><id>http://arxiv.org/abs/{versioned}</id>"
+        f"<title>{title or 'Paper ' + paper_id}\n  continued</title>"
+        f"<updated>{updated or published}</updated><published>{published}</published>"
+        f'<link href="https://arxiv.org/abs/{versioned}" rel="alternate" type="text/html"/>'
+        f'<link href="https://arxiv.org/pdf/{versioned}" rel="related" title="pdf"/>'
+        f"<summary>  An abstract\n about {paper_id}.  </summary>{cats}"
+        f'<arxiv:primary_category term="{categories[0]}"/>'
+        "<author><name>Ada Author</name></author><author><name>Bob Builder</name></author>"
+        "</entry>"
+    )
+
+
+def atom_feed(entries: Sequence[str], *, total: int, start: int = 0) -> bytes:
+    """A page of API results."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<feed xmlns="http://www.w3.org/2005/Atom" '
+        'xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" '
+        'xmlns:arxiv="http://arxiv.org/schemas/atom">'
+        "<id>https://arxiv.org/api/x</id><title>query</title>"
+        f"<opensearch:totalResults>{total}</opensearch:totalResults>"
+        f"<opensearch:startIndex>{start}</opensearch:startIndex>"
+        f"<opensearch:itemsPerPage>{len(entries)}</opensearch:itemsPerPage>"
+        + "".join(entries)
+        + "</feed>"
+    ).encode()
+
+
+def paper_pdf(marker: str = "BODY") -> bytes:
+    """A small but complete paper as a PDF: passes the quality gate."""
+    lines: list[PdfLine] = [("A Synthetic Paper", 16.0), "Abstract", "An abstract."]
+    for number, title in enumerate(("Introduction", "Design", "Evaluation", "Conclusion"), 1):
+        lines.append(f"{number} {title}")
+        for n in range(8):
+            lines.append(
+                f"{marker} {title.lower()} line {n} explains how the cache keeps its useful"
+            )
+            lines.append(f"blocks for {title.lower()} number {n} while the memory system is busy.")
+    lines += ["References", "[1] A. Smith. Caches. 2020."]
+    pages = [lines[i : i + 45] for i in range(0, len(lines), 45)]
+    return make_pdf(pages, info={"License": "http://creativecommons.org/licenses/by/4.0/"})
+
+
+def paper_html(marker: str = "BODY") -> bytes:
+    """A small but complete LaTeXML page: passes the quality gate."""
+    body = "".join(
+        section(f"S{n}", str(n), title, para(prose(f"{marker} {title.lower()}", sentences=6)))
+        for n, title in enumerate(("Introduction", "Design", "Evaluation", "Conclusion"), 1)
+    )
+    return latexml_page(body)
+
+
 def prose(topic: str, sentences: int = 4) -> str:
     """Filler sentences that read as English prose (for length and quality gates)."""
     sentence = (

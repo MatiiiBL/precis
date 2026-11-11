@@ -94,6 +94,13 @@ class FetchConfig(Record):
     user_agent: str = f"precis/{__version__}"
     prefer: Literal["html", "pdf"] = "html"
     raw_dir: Path = Path("data/raw")
+    page_size: int = Field(
+        default=200, gt=0, le=2000, description="Results per arXiv API request (API max 2000)."
+    )
+    max_attempts: int = Field(
+        default=5, gt=0, description="Tries per request on 429, 5xx, timeouts and empty pages."
+    )
+    timeout_s: float = Field(default=60.0, gt=0, description="Per-request timeout.")
 
 
 class PipelineConfig(Record):
