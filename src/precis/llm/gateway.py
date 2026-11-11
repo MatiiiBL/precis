@@ -96,8 +96,15 @@ class _Counters:
 
 @dataclass
 class _Estimate:
-    """What a request is expected to use, for reservations and the budget."""
+    """What a request is expected to use, for reservations and the budget.
 
+    ``prompt_tokens`` is the whole prompt by ``estimate_tokens``;
+    ``input_tokens`` is the part expected to count against the input-token
+    limit (the prompt scaled by the stage's observed ratio, which is below 1
+    when most of it is read from the prompt cache).
+    """
+
+    prompt_tokens: int
     input_tokens: int
     output_tokens: int
     cost_usd: float
@@ -276,8 +283,9 @@ class Gateway:
 
     def _estimate(self, params: dict[str, Any], stage: str) -> _Estimate:
         prompt = {k: params.get(k) for k in ("system", "messages", "tools")}
-        raw_input = estimate_tokens(canonical_json(prompt))
-        input_tokens = max(1, round(raw_input * self._input_ratio.get(stage, 1.0)))
+        prompt_tokens = max(1, estimate_tokens(canonical_json(prompt)))
+        ratio = min(1.0, self._input_ratio.get(stage, 1.0))
+        input_tokens = max(1, round(prompt_tokens * ratio))
         max_tokens = int(params.get("max_tokens", _DEFAULT_OUTPUT_TOKENS))
         output_tokens = max(
             1, min(max_tokens, round(self._output_avg.get(stage, _DEFAULT_OUTPUT_TOKENS)))
@@ -286,9 +294,10 @@ class Gateway:
             str(params["model"]),
             input_tokens,
             output_tokens,
+            cache_read_tokens=prompt_tokens - input_tokens,
             batch=self._mode == "batch",
         )
-        return _Estimate(input_tokens, output_tokens, usd)
+        return _Estimate(prompt_tokens, input_tokens, output_tokens, usd)
 
     def _check_budget(self, estimate: _Estimate) -> None:
         budget = self._config.budget.max_cost_usd
@@ -303,10 +312,15 @@ class Gateway:
             )
 
     def _learn(self, stage: str, estimate: _Estimate, reply: Reply) -> None:
-        """Update the per-stage output average and input estimate correction."""
+        """Update the per-stage output average and the counted-input ratio.
+
+        The ratio is measured against the unscaled prompt estimate, never
+        against a reservation that already applied an earlier ratio: with
+        many requests in flight that would feed the ratio back into itself.
+        """
         usage = reply.usage
         counted = usage.input_tokens + (usage.cache_creation_input_tokens or 0)
-        ratio = counted / max(1, estimate.input_tokens) * self._input_ratio.get(stage, 1.0)
+        ratio = counted / estimate.prompt_tokens
         self._input_ratio[stage] = _ewma(self._input_ratio.get(stage), ratio)
         self._output_avg[stage] = _ewma(self._output_avg.get(stage), usage.output_tokens)
 

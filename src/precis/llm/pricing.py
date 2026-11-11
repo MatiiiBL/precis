@@ -141,9 +141,18 @@ def cost(usage: UsageLike, model: str, *, batch: bool = False) -> float:
 
 
 def estimate_cost(
-    model: str, input_tokens: int, output_tokens: int, *, batch: bool = False
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cache_read_tokens: int = 0,
+    batch: bool = False,
 ) -> float:
-    """Upper-bound cost of a request before it is sent (all input uncached)."""
-    price = pricing(model).for_prompt(input_tokens)
-    usd = (input_tokens * price.input + output_tokens * price.output) / 1_000_000
+    """Expected cost of a request before it is sent, from token estimates."""
+    price = pricing(model).for_prompt(input_tokens + cache_read_tokens)
+    usd = (
+        input_tokens * price.input
+        + cache_read_tokens * price.cache_read
+        + output_tokens * price.output
+    ) / 1_000_000
     return usd * BATCH_DISCOUNT if batch else usd

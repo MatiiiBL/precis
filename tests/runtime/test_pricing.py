@@ -82,7 +82,7 @@ def test_price_follows_the_serving_model() -> None:
         cost(u, "claude-unknown")
 
 
-def test_estimate_is_an_uncached_upper_bound() -> None:
+def test_estimate_prices_expected_cache_reads() -> None:
     assert estimate_cost("claude-opus-5-5", 1_000, 1_000) == pytest.approx(
         cost(usage(inp=1_000, out=1_000), "claude-opus-5-5")
     )
