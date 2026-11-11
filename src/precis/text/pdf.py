@@ -562,7 +562,10 @@ def _lettered_candidates(lines: list[str], doc: _Lines, start: int = 0) -> list[
         parts = match["num"].split(".")
         key = (ord(parts[0]) - ord("A") + 1, *(int(p) for p in parts[1:]))
         candidate = _candidate(lines, i, key, match["title"], doc)
-        if candidate is not None:
+        # "A Hopfield neural network is a nonlinear dynamical system, whereby
+        # ..." starts with the article, not appendix A: a long title or one
+        # that runs on into the next line is a sentence.
+        if candidate is not None and len(candidate.title) <= 90 and not candidate.runs_on:
             candidates.append(candidate)
     return candidates
 

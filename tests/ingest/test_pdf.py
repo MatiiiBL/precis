@@ -470,6 +470,22 @@ def test_headings_wrapped_onto_a_second_line_are_joined() -> None:
     assert doc.sections[3].text.startswith("Theory of Operation FFT servers")
 
 
+def test_a_sentence_starting_with_the_article_a_is_not_appendix_a() -> None:
+    """2510.26492: "A Hopfield neural network is ..., whereby ..." became appendix A."""
+    lines: list[PdfLine] = [
+        "1 Introduction",
+        *prose("INTRO"),
+        "2 Method",
+        *prose("METHOD"),
+        "A Hopfield neural network is a nonlinear dynamical system, whereby the definition of",
+        "the continuous state of every neuron is updated from the weighted sum of the others.",
+        *prose("HOPFIELD"),
+    ]
+    doc = parse(lines)
+    assert [s.id for s in doc.sections] == ["s1", "s2"]
+    assert "A Hopfield neural network" in doc.sections[1].text
+
+
 def test_references_heading_with_a_period_and_sentences_that_wrap_after_a_number() -> None:
     """2508.13249: "References." went unrecognized, so numbered references continued the
     section numbers, and "Table" / "3. ICE models ..." beat "3. Methods"."""
