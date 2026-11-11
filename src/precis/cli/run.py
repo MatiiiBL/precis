@@ -59,11 +59,17 @@ def parse_stages(value: str) -> list[Stage]:
 
 
 def select_papers(store: Store, ids: list[str] | None, limit: int | None) -> list[str]:
-    """The given ids (comma-separated or repeated), or the newest papers in the store."""
+    """The given ids (comma-separated or repeated), or the newest papers with their text.
+
+    Without ``ids``, only papers whose fetch stage is done are chosen, so that
+    ``--limit`` is not spent on papers a running fetch has not reached yet.
+    """
     if ids:
         chosen = list(dict.fromkeys(i.strip() for v in ids for i in v.split(",") if i.strip()))
-        return chosen[:limit] if limit is not None else chosen
-    return [meta.id for meta in store.list_papers(limit=limit)]
+    else:
+        fetched = set(store.papers_with_status(Stage.FETCH, StageStatus.DONE))
+        chosen = [meta.id for meta in store.list_papers() if meta.id in fetched]
+    return chosen[:limit] if limit is not None else chosen
 
 
 def new_run_id() -> str:
@@ -106,7 +112,7 @@ def run_command(
     try:
         paper_ids = select_papers(store, ids, limit)
         if not paper_ids:
-            console.print("No papers in the store; run [bold]precis fetch[/bold] first.")
+            console.print("No fetched papers in the store; run [bold]precis fetch[/bold] first.")
             raise typer.Exit(1)
         # Offline, simulated time runs fast so that batch waits (minutes of
         # queueing and polling) take a fraction of a second.
@@ -144,6 +150,9 @@ def _print_run_summary(run_id: str, stats: dict[str, Any]) -> None:
         f"{gateway['calls']:,} requests ({gateway['cached_calls']:,} from cache), "
         f"${gateway['cost_usd']:.4f}."
     )
+    if stats["blocked"]:
+        reasons = "; ".join(f"{n:,} {reason}" for reason, n in stats["blocked"].items())
+        console.print(f"Blocked: {reasons}.")
     faithfulness = stats["faithfulness"]
     final, first = faithfulness["final"], faithfulness["first_drafts"]
     if final["claims"]:

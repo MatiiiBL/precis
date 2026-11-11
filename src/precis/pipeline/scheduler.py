@@ -178,12 +178,9 @@ class Pipeline:
         meta = self.store.get_paper(paper_id)
         doc = self.store.get_document(paper_id) if meta is not None else None
         if meta is None or doc is None:
-            log.info(
-                "%s: no %s; run `precis fetch` first",
-                paper_id,
-                "paper" if meta is None else "document",
-            )
-            self.stats.papers_blocked += 1
+            reason = "not in the store" if meta is None else "no document; run precis fetch"
+            log.info("%s: %s", paper_id, reason)
+            self.stats.blocked[reason] += 1
             return
         paper = _Paper(meta, doc)
         # Stages before the last requested one supply its inputs; later ones are not touched.
@@ -193,7 +190,7 @@ class Pipeline:
                 await self._stage(paper, stage, run=stage in stages)
         except _Blocked as blocked:
             log.info("%s: %s", paper_id, blocked)
-            self.stats.papers_blocked += 1
+            self.stats.blocked[str(blocked)] += 1
         except _StopPaper:
             pass
         else:
@@ -212,7 +209,7 @@ class Pipeline:
             # A stage that was not asked for only supplies its stored result,
             # whatever settings produced it.
             if record is None or record.status is not StageStatus.DONE:
-                raise _Blocked(f"{stage.value} is not done; include it in --stages")
+                raise _Blocked(f"{stage.value} not done; include it in --stages")
             self._load(paper, stage, record)
             return
         config_hash = self._config_hash(paper, stage)
@@ -238,11 +235,11 @@ class Pipeline:
         if stage is Stage.READ:
             return hashing.read_hash(agents, paper.meta, paper.doc)
         if paper.summary is None:
-            raise _Blocked(f"{stage.value} needs a summary; run the read stage")
+            raise _Blocked("read not done; include it in --stages")
         if stage is Stage.VERIFY:
             return hashing.verify_hash(agents, paper.meta, paper.doc, paper.summary)
         if paper.verification is None:
-            raise _Blocked("revise needs a verification; run the verify stage")
+            raise _Blocked("verify not done; include it in --stages")
         return hashing.revise_hash(agents, paper.meta, paper.doc, paper.summary, paper.verification)
 
     def _load(self, paper: _Paper, stage: Stage, record: StageRecord) -> None:

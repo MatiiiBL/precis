@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from precis.config import Config
 from precis.llm import Gateway, ManualClock
 from precis.llm.fake import FakeAnthropic, Responder
-from precis.models import Document, PaperMeta, Section
+from precis.models import Document, PaperMeta, Section, Stage, StageRecord, StageStatus
 from precis.offline import RESPONDERS
 from precis.pipeline import Pipeline
 from precis.store import Store
@@ -64,11 +64,23 @@ def paper(i: int, title: str | None = None) -> tuple[PaperMeta, Document]:
 
 
 def add_papers(store: Store, n: int, **titles: str) -> list[str]:
+    """Store ``n`` papers with their documents and a done fetch stage, as precis fetch does."""
     ids = []
     for i in range(n):
         meta, doc = paper(i, titles.get(f"p{i}"))
         store.upsert_paper(meta)
         store.put_document(doc)
+        store.set_stage(
+            StageRecord(
+                paper_id=meta.id,
+                stage=Stage.FETCH,
+                status=StageStatus.DONE,
+                attempts=1,
+                config_hash="fetch",
+                run_id="fetch",
+                updated_at=datetime.now(UTC),
+            )
+        )
         ids.append(meta.id)
     return ids
 

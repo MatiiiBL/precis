@@ -107,11 +107,15 @@ class RunStats:
         default_factory=lambda: {s: StageTally() for s in PIPELINE_STAGES}
     )
     papers_finished: int = 0
-    papers_blocked: int = 0
-    """Papers with no document, or whose earlier stage has not succeeded."""
+    blocked: Counter[str] = field(default_factory=Counter)
+    """Papers that could not run, by reason (no document, an earlier stage not done)."""
     faithfulness: Faithfulness = field(default_factory=Faithfulness)
     interrupted: bool = False
     budget_reached: bool = False
+
+    @property
+    def papers_blocked(self) -> int:
+        return sum(self.blocked.values())
 
     @property
     def elapsed_s(self) -> float:
@@ -131,6 +135,7 @@ class RunStats:
             "papers": self.papers,
             "papers_finished": self.papers_finished,
             "papers_blocked": self.papers_blocked,
+            "blocked": dict(self.blocked.most_common()),
             "interrupted": self.interrupted,
             "budget_reached": self.budget_reached,
             "elapsed_s": round(self.elapsed_s, 3),

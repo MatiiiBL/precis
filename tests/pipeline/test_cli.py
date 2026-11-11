@@ -1,6 +1,7 @@
 """``precis run``, ``precis status`` and ``precis export`` with the offline client."""
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ from precis.cli import app
 from precis.models import Stage, StageStatus
 from precis.store import Store
 
-from .helpers import add_papers
+from .helpers import add_papers, paper
 
 
 @pytest.fixture
@@ -89,24 +90,15 @@ def test_batch_mode_runs_offline_and_costs_less(store_path: Path) -> None:
     batch = precis(store_path, "run", "--offline", "--mode", "batch")
     assert batch.exit_code == 0, batch.output
     assert "4 of 4 papers finished" in batch.output
-    Store(online_store).close()
     store = Store(store_path)
     calls = store.calls()
     assert calls
     assert all(c.batch for c in calls)
     batch_cost = sum(c.cost_usd for c in calls)
-    papers = store.list_papers()
     store.close()
 
     copy = Store(online_store)
-    for meta in papers:
-        copy.upsert_paper(meta)
-    source = Store(store_path)
-    for meta in papers:
-        doc = source.get_document(meta.id)
-        assert doc is not None
-        copy.put_document(doc)
-    source.close()
+    add_papers(copy, 4)
     copy.close()
     online = precis(online_store, "run", "--offline")
     assert online.exit_code == 0, online.output
@@ -129,4 +121,21 @@ def test_bad_input(store_path: Path, tmp_path: Path) -> None:
     assert "choose from read, verify, revise" in bad.output
     empty = precis(tmp_path / "empty.db", "run", "--offline")
     assert empty.exit_code == 1
-    assert "No papers in the store" in empty.output
+    assert "No fetched papers in the store" in empty.output
+
+
+def test_limit_picks_fetched_papers_and_blocked_reasons_are_counted(store_path: Path) -> None:
+    store = Store(store_path)
+    # Newer than the fetched papers, but its text has not been downloaded yet.
+    meta, _ = paper(9)
+    store.upsert_paper(meta.model_copy(update={"published": date(2026, 1, 1)}))
+    store.close()
+
+    picked = precis(store_path, "run", "--offline", "--stages", "read", "--limit", "2")
+    assert picked.exit_code == 0, picked.output
+    assert "2 of 2 papers finished, 0 blocked" in picked.output
+
+    named = precis(store_path, "run", "--offline", "--ids", f"{meta.id},2501.00000")
+    assert named.exit_code == 0, named.output
+    assert "1 of 2 papers finished, 1 blocked" in named.output
+    assert "Blocked: 1 no document; run precis fetch." in named.output

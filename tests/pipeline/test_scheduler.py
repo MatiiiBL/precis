@@ -129,7 +129,8 @@ async def test_missing_documents_and_missing_inputs_block_the_paper() -> None:
     s = setup()
     ids = add_papers(s.store, 2)
     stats = await s.pipeline("run-1").run([*ids, "2501.99999"], [Stage.VERIFY])
-    assert stats["papers_blocked"] == 3  # no summaries yet, and one unknown paper
+    assert stats["papers_blocked"] == 3
+    assert stats["blocked"] == {"read not done; include it in --stages": 2, "not in the store": 1}
     assert stats["stages"]["verify"]["done"] == 0
     assert len(s.fake.requests) == 0
 
