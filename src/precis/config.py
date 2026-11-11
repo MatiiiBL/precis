@@ -49,15 +49,36 @@ class AgentsConfig(Record):
 
 
 class LimitsConfig(Record):
-    """Client-side admission control for the Messages API."""
+    """Client-side admission control, retries and batching for the Messages API."""
 
     max_concurrency: int = Field(default=64, gt=0, description="Ceiling for adaptive concurrency.")
     initial_concurrency: int = Field(default=8, gt=0)
     rpm: int | None = Field(default=None, description="Requests/min; None = learn from headers.")
     itpm: int | None = Field(default=None, description="Input tokens/min; None = learn.")
     otpm: int | None = Field(default=None, description="Output tokens/min; None = learn.")
+    burst_s: float = Field(
+        default=10.0,
+        gt=0,
+        description="Seconds of each per-minute limit that may be sent in one burst.",
+    )
     max_attempts: int = Field(default=8, gt=0)
     request_timeout_s: float = Field(default=600.0, gt=0)
+    backoff_base_s: float = Field(
+        default=1.0, gt=0, description="First retry waits up to this long (full jitter)."
+    )
+    backoff_max_s: float = Field(default=60.0, gt=0, description="Cap on one retry's wait.")
+    batch_max_requests: int = Field(
+        default=500, gt=0, le=100_000, description="Batch mode: send a batch at this many requests."
+    )
+    batch_max_wait_s: float = Field(
+        default=30.0,
+        gt=0,
+        description="Batch mode: send a batch this long after its first request.",
+    )
+    batch_poll_s: float = Field(
+        default=10.0, gt=0, description="First wait before polling a batch."
+    )
+    batch_poll_max_s: float = Field(default=120.0, gt=0, description="Cap on the polling interval.")
 
 
 class BudgetConfig(Record):
