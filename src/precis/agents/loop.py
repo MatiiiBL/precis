@@ -9,9 +9,10 @@ ends its turn without submitting.
 
 The conversation is append-only. Assistant turns go back exactly as they
 came (thinking included), budget notices are mid-conversation system
-messages rather than edits to the system prompt, and the tool set never
-changes; together with top-level automatic caching this lets every turn read
-the previous turn's prefix from the prompt cache.
+messages (a text block after the tool results on models that reject those)
+rather than edits to the system prompt, and the tool set never changes;
+together with top-level automatic caching this lets every turn read the
+previous turn's prefix from the prompt cache.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from precis.agents.messages import (
     assistant_turn,
     base_params,
     cache_control,
+    harness_note,
     send,
     tool_calls,
     tool_result,
@@ -93,7 +95,7 @@ async def run_agent[T](
             and messages[-1]["role"] == "user"
             and _nearly_spent(trace, config)
         ):
-            messages.append({"role": "system", "content": _budget_notice(trace, config, spec)})
+            harness_note(config.model, messages, _budget_notice(trace, config, spec))
             trace.budget_notices += 1
 
         params = base_params(config, spec.system, messages, ttl=spec.cache_ttl)

@@ -139,11 +139,17 @@ def _exchanges(messages: Iterable[dict[str, Any]]) -> list[_Exchange]:
 
 
 def _must_finish(messages: list[dict[str, Any]]) -> bool:
-    """A budget notice or a nudge is in the conversation."""
-    return any(m["role"] == "system" for m in messages) or (
-        len(messages) > 1
-        and messages[-1]["role"] == "user"
-        and isinstance(messages[-1]["content"], str)
+    """A budget notice (a system message or a text block) or a nudge is in the conversation."""
+    if any(m["role"] == "system" for m in messages):
+        return True
+    last = messages[-1]
+    if len(messages) > 1 and last["role"] == "user" and isinstance(last["content"], str):
+        return True
+    return any(
+        block.get("type") == "text" and block["text"].startswith("Budget notice")
+        for m in messages
+        if m["role"] == "user" and not isinstance(m["content"], str)
+        for block in m["content"]
     )
 
 

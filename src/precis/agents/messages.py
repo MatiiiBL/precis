@@ -33,6 +33,43 @@ and tool schemas are versioned by their own hashes.
 """
 
 
+SYSTEM_MESSAGE_MODELS = frozenset(
+    {
+        "claude-opus-5-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-fable-5-2",
+        "claude-fable-5-1",
+        "claude-fable-5",
+        "claude-mythos-5-2",
+        "claude-mythos-5-1",
+        "claude-mythos-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
+    }
+)
+"""Models that accept ``role: "system"`` messages inside ``messages``.
+
+Others (Claude Sonnet 5, and models before Opus 4.8) reject them with a 400.
+"""
+
+
+def harness_note(model: str, messages: list[dict[str, Any]], text: str) -> None:
+    """Add an operator note after the last user message, in a form ``model`` accepts.
+
+    Where supported it is a mid-conversation system message, which keeps the
+    cached prefix and carries operator authority; otherwise it is a text block
+    appended to the last user message, after any tool results.
+    """
+    if model in SYSTEM_MESSAGE_MODELS:
+        messages.append({"role": "system", "content": text})
+        return
+    last = messages[-1]
+    content = last["content"]
+    blocks = [{"type": "text", "text": content}] if isinstance(content, str) else list(content)
+    messages[-1] = {**last, "content": [*blocks, {"type": "text", "text": text}]}
+
+
 def cache_control(ttl: CacheTTL) -> dict[str, str]:
     """A cache breakpoint; the 5-minute lifetime is the API default and is left implicit."""
     return {"type": "ephemeral", "ttl": "1h"} if ttl == "1h" else {"type": "ephemeral"}

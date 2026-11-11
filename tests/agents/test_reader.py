@@ -195,6 +195,18 @@ async def test_budget_notice_is_a_system_message_after_the_tool_results() -> Non
     assert result.trace.budget_notices == 1
 
 
+async def test_budget_notice_is_a_text_block_for_models_without_system_messages() -> None:
+    # Claude Sonnet 5 answers a mid-conversation system message with a 400.
+    gw = ScriptedGateway([reading_turn(1), reading_turn(2), tool_turn(SUBMIT)])
+    await read(gw, reader=AgentConfig(model="claude-sonnet-5", max_turns=4))
+    third = gw.requests[2]
+    assert all(m["role"] != "system" for m in third["messages"])
+    last = third["messages"][-1]
+    assert last["role"] == "user"
+    assert [b["type"] for b in last["content"]] == ["tool_result", "text"]
+    assert last["content"][1]["text"].startswith("Budget notice: you have used 2 of 4 turns")
+
+
 async def test_token_budget_triggers_the_notice() -> None:
     gw = ScriptedGateway([reading_turn(1, usage=(900, 50)), tool_turn(SUBMIT)])
     await read(gw, reader=AgentConfig(token_budget=1000))
