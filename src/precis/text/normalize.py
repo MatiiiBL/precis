@@ -31,12 +31,29 @@ _SPACE = re.compile(r"\s+")
 # Mathematical italic/bold letters (U+1D400-U+1D7FF) that PDF math fonts map
 # to; as plain letters they match a search for the same symbol in prose.
 _MATH_ALPHANUMERIC = re.compile("[\U0001d400-\U0001d7ff]")
+# UTF-16 surrogate code points (built with chr so the source stays valid UTF-8).
+_SURROGATE = re.compile(f"[{chr(0xD800)}-{chr(0xDFFF)}]")
 
 
 def clean_chars(text: str) -> str:
-    """Expand ligatures, plain-letter math italics, drop invisible characters; keep newlines."""
+    """Repair surrogates, expand ligatures, plain-letter math italics, drop invisible
+    characters; keep newlines."""
+    text = fix_surrogates(text)
     text = _MATH_ALPHANUMERIC.sub(lambda m: unicodedata.normalize("NFKC", m[0]), text)
     return text.translate(_TRANSLATION)
+
+
+def fix_surrogates(text: str) -> str:
+    """Recombine UTF-16 surrogate pairs into characters and drop lone halves.
+
+    pypdf sometimes returns a math letter such as U+1D44E as its two UTF-16
+    halves, or only the high half ('\\ud835') when the low one was lost. A
+    Python string may hold them, but they cannot be encoded as UTF-8, so
+    one such paper made the store fail to write its document.
+    """
+    if not _SURROGATE.search(text):
+        return text
+    return text.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "ignore")
 
 
 def squash(text: str) -> str:

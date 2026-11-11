@@ -1,8 +1,10 @@
 import gzip
 from collections.abc import Sequence
 from datetime import date
+from typing import Any
 
 import pytest
+from pypdf import PageObject
 
 from precis.models import Document
 from precis.text.document import ParseError
@@ -279,6 +281,25 @@ def test_appendix_announced_by_name_before_the_references() -> None:
     assert [(s.id, s.title) for s in doc.sections][-1] == ("a1", "APPENDIX")
     assert doc.sections[-1].text.startswith("APPENDIXMARK")
     assert "APPENDIXMARK" not in doc.sections[1].text
+
+
+def test_surrogates_from_pypdf_never_reach_the_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    """2512.14151: lone '\\ud835' halves made the store fail to write the document."""
+    high, low = chr(0xD835), chr(0xDC4E)
+    real_extract = PageObject.extract_text
+
+    def extract(page: PageObject, *args: Any, **kwargs: Any) -> str:
+        text = real_extract(page, *args, **kwargs)
+        return text.replace(
+            "Formally", f"Formally, for a sequence {high} = {{{high}{low}1, {high}2}},"
+        )
+
+    monkeypatch.setattr(PageObject, "extract_text", extract)
+    lines: list[PdfLine] = ["1 Introduction", "Formally the cache keeps blocks.", *prose("A")]
+    lines += ["2 Design", *prose("B")]
+    doc = parse(lines)
+    doc.model_dump_json()  # raised PydanticSerializationError before
+    assert "for a sequence = {a1, 2}" in doc.sections[0].text
 
 
 def test_unusable_files_raise_parse_errors() -> None:

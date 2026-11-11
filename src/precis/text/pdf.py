@@ -259,6 +259,8 @@ def _page_lines(reader: PdfReader) -> list[list[str]]:
             logger.warning("page %d: text extraction failed: %s", number, exc)
             failed += 1
             text = ""
+        # Whole page first, so a surrogate pair is recombined before any split.
+        text = clean_chars(text)
         pages.append([line for line in (squash(raw) for raw in text.splitlines()) if line])
     if pages and failed / len(pages) > MAX_FAILED_PAGES:
         raise ParseError(f"text extraction failed on {failed} of {len(pages)} pages")

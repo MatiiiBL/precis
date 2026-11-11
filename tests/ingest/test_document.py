@@ -2,7 +2,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from precis.text.document import SectionDraft, build_document, split_into_parts
-from precis.text.normalize import clean_chars, join_paragraphs, squash
+from precis.text.normalize import clean_chars, fix_surrogates, join_paragraphs, squash
 from precis.util import estimate_tokens
 
 
@@ -91,6 +91,18 @@ def test_split_into_parts_never_loses_or_reorders_words(paragraphs: list[str]) -
     parts = split_into_parts(paragraphs, target_tokens=50)
     words = [w for p in paragraphs for w in p.split()]
     assert [w for part in parts for p in part.paragraphs for w in p.split()] == words
+
+
+def test_surrogates_are_recombined_or_dropped() -> None:
+    """2512.14151: pypdf returned math letters as lone UTF-16 halves ('\\ud835')."""
+    high, low = chr(0xD835), chr(0xDC4E)  # the two halves of U+1D44E, italic "a"
+    assert fix_surrogates(f"x {high}{low} y") == f"x {chr(0x1D44E)} y"
+    assert fix_surrogates(f"S = {{{high}1, {high}2}}") == "S = {1, 2}"
+    assert fix_surrogates(f"{low}lone low") == "lone low"
+    assert fix_surrogates("plain text") == "plain text"
+    # clean_chars, which every parser uses, also plain-letters the result.
+    assert clean_chars(f"{high}{low}{high}") == "a"
+    clean_chars(f"{high}x").encode("utf-8")  # encodable: no surrogate left
 
 
 def test_clean_chars_expands_ligatures_and_math_letters() -> None:
