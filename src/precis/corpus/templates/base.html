@@ -11,9 +11,11 @@
 <header class="site-header">
   <div class="wrap header-row">
     <a class="brand" href="{{ root }}index.html">{{ site_title }}</a>
+    {% block header_search %}
     <form class="search-form" action="{{ root }}search.html" method="get" role="search">
       <input type="search" name="q" placeholder="Search papers" aria-label="Search papers">
     </form>
+    {% endblock %}
   </div>
 </header>
 <main class="wrap">

@@ -22,7 +22,9 @@ names stay distinct.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -67,13 +69,33 @@ _RESEARCH_WRITING_WORDS = """
     author authors
 """
 TECHNICAL_STOP_WORDS = frozenset(_RESEARCH_WRITING_WORDS.split())
-STOP_WORDS = sorted(ENGLISH_STOP_WORDS | TECHNICAL_STOP_WORDS)
-TOKEN_PATTERN = r"(?u)\b[a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*\b"
+STOP_WORDS = ENGLISH_STOP_WORDS | TECHNICAL_STOP_WORDS
+# Words start with a letter and may contain digits and inner hyphens
+# ("3d" is dropped, "network-on-chip" and "gpt-4" are kept whole).
+_TOKEN = re.compile(r"\b[a-z][a-z0-9]*(?:-[a-z0-9]+)*\b")
+_SEGMENT = re.compile(r"[,;:.!?()\[\]\n]+(?:\s|$)|\n")
+
+
+def analyze(text: str) -> list[str]:
+    """Unigrams and bigrams of ``text``, without stop words.
+
+    Bigrams are formed within a clause or list item only, so the keyword
+    list "caches, prefetching" does not produce the phrase "caches
+    prefetching".
+    """
+    terms: list[str] = []
+    for segment in _SEGMENT.split(text.lower()):
+        words = [w for w in _TOKEN.findall(segment) if w not in STOP_WORDS]
+        terms += words
+        terms += [f"{a} {b}" for a, b in itertools.pairwise(words)]
+    return terms
 
 
 def topic_text(summary: PaperSummary) -> str:
     """The text a paper is clustered on: what it does and with what, not its findings."""
-    return " ".join([summary.tldr, summary.approach, *summary.methods, *summary.keywords])
+    return "\n".join(
+        [summary.tldr, summary.approach, ", ".join(summary.methods), ", ".join(summary.keywords)]
+    )
 
 
 @dataclass(frozen=True)
@@ -103,10 +125,8 @@ class Clustering:
 def _vectorize(texts: Sequence[str], components: int, seed: int) -> FloatMatrix:
     n = len(texts)
     vectorizer = TfidfVectorizer(
+        analyzer=analyze,
         sublinear_tf=True,
-        ngram_range=(1, 2),
-        stop_words=STOP_WORDS,
-        token_pattern=TOKEN_PATTERN,
         min_df=2 if n >= 20 else 1,
         max_df=0.5 if n >= 20 else 1.0,
         dtype=np.float64,
@@ -188,9 +208,24 @@ def cluster_papers(
     return Clustering(list(paper_ids), labels, vectors, int(labels.max()) + 1, scores)
 
 
-def _redundant(term: str, chosen: Sequence[str]) -> bool:
+def _add_term(term: str, chosen: list[str]) -> None:
+    """Add ``term`` to ``chosen`` unless a chosen phrase already contains it.
+
+    A phrase takes the place of the single words it is made of, at the
+    position of the best-ranked one: "cache replacement" arriving after
+    "cache" and "replacement" replaces both, since unigrams almost always
+    outscore the bigrams that contain them.
+    """
     words = set(term.split())
-    return any(words <= set(other.split()) or set(other.split()) <= words for other in chosen)
+    if any(words <= set(other.split()) for other in chosen):
+        return
+    parts = [i for i, other in enumerate(chosen) if set(other.split()) < words]
+    if not parts:
+        chosen.append(term)
+        return
+    chosen[parts[0]] = term
+    for i in reversed(parts[1:]):
+        del chosen[i]
 
 
 def class_keywords(texts: Sequence[str], labels: IntVector, *, n: int = 10) -> list[list[str]]:
@@ -199,13 +234,11 @@ def class_keywords(texts: Sequence[str], labels: IntVector, *, n: int = 10) -> l
     All the texts of a cluster are treated as one document: a term scores
     ``tf(term, cluster) * log(1 + A / f(term))``, where ``tf`` is its share of
     the cluster's words, ``A`` the average number of words per cluster and
-    ``f`` the term's frequency in the whole corpus. Terms that repeat a
-    higher-ranked term (a unigram inside a chosen bigram, or the reverse) are
-    skipped.
+    ``f`` the term's frequency in the whole corpus. A bigram replaces the
+    chosen unigrams it contains, and a unigram inside a chosen bigram is
+    skipped, so no keyword repeats another.
     """
-    vectorizer = CountVectorizer(
-        ngram_range=(1, 2), stop_words=STOP_WORDS, token_pattern=TOKEN_PATTERN
-    )
+    vectorizer = CountVectorizer(analyzer=analyze)
     counts = vectorizer.fit_transform(texts)
     vocabulary = vectorizer.get_feature_names_out()
     k = int(labels.max()) + 1
@@ -223,9 +256,7 @@ def class_keywords(texts: Sequence[str], labels: IntVector, *, n: int = 10) -> l
         for index in np.argsort(-row, kind="stable"):
             if row[index] <= 0 or len(chosen) == n:
                 break
-            term = str(vocabulary[index])
-            if not _redundant(term, chosen):
-                chosen.append(term)
+            _add_term(str(vocabulary[index]), chosen)
         keywords.append(chosen)
     return keywords
 

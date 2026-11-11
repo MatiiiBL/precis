@@ -8,6 +8,7 @@ from corpus.factories import THEMES, ScriptedGateway, make_view, themed_corpus
 from precis.config import AgentConfig, CorpusConfig
 from precis.corpus.topics import (
     TopicLabel,
+    analyze,
     build_topics,
     class_keywords,
     cluster_papers,
@@ -96,6 +97,27 @@ def test_class_keywords_are_distinctive_and_not_redundant() -> None:
             for other in words[i + 1 :]:
                 assert not set(other.split()) <= set(word.split())
                 assert not set(word.split()) <= set(other.split())
+
+
+def test_bigrams_stay_within_list_items() -> None:
+    terms = analyze("We propose cache replacement, prefetching; a network-on-chip.\nGPT-4 wins")
+    assert terms == [
+        "cache",
+        "replacement",
+        "cache replacement",
+        "prefetching",
+        "network-on-chip",
+        "gpt-4",
+        "wins",
+        "gpt-4 wins",
+    ]
+
+
+def test_phrases_replace_the_words_they_contain() -> None:
+    texts = ["cache replacement policy"] * 3 + ["qubit routing"] * 3
+    keywords = class_keywords(texts, np.array([0, 0, 0, 1, 1, 1]))
+    assert keywords[1] == ["qubit routing"]
+    assert set(keywords[0]) == {"cache replacement", "replacement policy"}
 
 
 def test_technical_stop_words_are_not_keywords() -> None:

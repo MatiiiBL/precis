@@ -42,7 +42,7 @@
 
   <section>
     <h2>Findings</h2>
-    {% if counts.final.total %}<p class="muted">{{ counts.final.supported }} of {{ counts.final.total }} claims supported by the paper.</p>{% endif %}
+    {% if counts.final.total %}<p class="muted">{{ counts.final.supported }} of {{ counts.final.total }} checked claims (the TL;DR and each finding) are supported by the paper.</p>{% endif %}
     {% for item in findings %}{{ claim(item) }}{% endfor %}
   </section>
 
