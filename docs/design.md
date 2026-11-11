@@ -110,6 +110,11 @@ class Store:
     def cache_put(self, request_hash: str, response: dict[str, Any]) -> None: ...
     def cache_delete(self, request_hash: str) -> None: ...
 
+    # message batches, recorded from creation until their results are read
+    def record_batch(self, batch_id: str, items: Sequence[BatchItem]) -> None: ...
+    def open_batches(self) -> list[tuple[str, list[BatchItem]]]: ...
+    def close_batch(self, batch_id: str) -> None: ...
+
     # runs and corpus artifacts (topics, syntheses, reports, eval results)
     def start_run(self, run_id: str, config: dict[str, Any]) -> None: ...
     def finish_run(self, run_id: str, stats: dict[str, Any]) -> None: ...
@@ -132,12 +137,14 @@ class Gateway:
                  config: Config, clock: Clock | None = None,
                  mode: Literal["online", "batch"] = "online") -> None: ...
     async def create(self, params: dict[str, Any], *, stage: str,
-                     paper_id: str | None = None) -> Message: ...
+                     paper_id: str | None = None) -> Reply: ...  # Message | BetaMessage
     @property
-    def spent_usd(self) -> float: ...
+    def spent_usd(self) -> float: ...       # this run
+    @property
+    def total_spent_usd(self) -> float: ... # everything in the store: what the budget caps
     def stats(self) -> GatewayStats: ...    # in flight, concurrency limit, calls,
                                             # retries, 429s, tokens, cost, ...
-    async def aclose(self) -> None: ...     # flush and wait for pending batches
+    async def aclose(self) -> None: ...     # stop; unfinished batches stay recorded
     @contextmanager
     def cache_scope(self, salt: str) -> Iterator[None]: ...  # see Cache below
 
@@ -168,34 +175,58 @@ The gateway adds the cross-cutting parts:
    `anthropic-ratelimit-*` response headers when a limit is `None`. Input is
    reserved from `util.estimate_tokens`, output from a running average per
    stage; both are corrected from `usage` when the response arrives.
-3. **Retries.** 429, 529, other 5xx, timeouts and connection errors retry
-   with exponential backoff and full jitter, honouring `retry-after`, up to
-   `limits.max_attempts`. Other 4xx errors fail immediately. The SDK's own
-   retries are off (`max_retries=0`) so that every attempt is visible to
-   admission control and accounting.
+3. **Retries.** Every request is streamed (`messages.stream` and
+   `get_final_message()`), so long generations do not hit the HTTP timeout,
+   which bounds each read rather than the whole reply. 429, 529, other 5xx
+   and connection errors retry with exponential backoff and full jitter,
+   honouring `retry-after`, up to `limits.max_attempts`; a timeout is
+   retried once (the server may already have generated and billed the
+   reply) and its request id is logged. Other 4xx errors fail immediately.
+   The SDK's own retries are off (`max_retries=0`) so that every attempt is
+   visible to admission control and accounting.
 4. **Refusals.** With `pipeline.fallbacks`, requests to models that support
    server-side fallbacks carry them. A final `stop_reason == "refusal"`
    raises `RefusalError`; the pipeline marks the stage `refused` and moves on.
-5. **Accounting.** Every attempt that returns is recorded as an `LLMCall`
-   with its usage and its cost from `precis.llm.pricing` (input, output,
-   cache writes and cache reads priced separately; batch requests at the
-   batch discount). `BudgetExceeded` is raised before a request when
-   `budget.max_cost_usd` would be crossed, and the scheduler stops admitting
-   papers.
+5. **Accounting.** Each request is recorded once as an `LLMCall`: the reply
+   that came back (status `ok` or `refusal`, with the number of attempts it
+   took), a `cached` hit, or an `error` row when it failed for good; the
+   failed attempts before a success are counted in `attempts`, not recorded
+   separately. Its cost comes from `precis.llm.pricing` (input, output,
+   cache writes and cache reads priced separately; each entry of
+   `usage.iterations`, such as an attempt declined before a fallback, at its
+   own model; batch requests at the batch discount).
+   **Budget.** `budget.max_cost_usd` caps the total spend recorded in the
+   store, earlier runs included. Before each request the gateway reserves
+   its uncached input at the request's cache-write rate and its output at
+   the largest reply its stage has produced (its whole `max_tokens` until the
+   stage has one), and raises `BudgetExceeded` when spent plus in-flight
+   reservations would cross the cap (saying so when the cap cannot fit even
+   one request); the scheduler then stops admitting papers. Replies longer
+   than their reservation can overshoot by at most about
+   `max_concurrency x max_tokens x output price`.
 6. **Batching.** In `mode="batch"` the gateway queues requests and sends them
-   through the Message Batches API (flush at N requests or after T seconds,
-   poll, route each result back to its waiting caller by `custom_id`).
-   Callers are unchanged: an agent awaiting `create` does not know whether it
-   was served online or by a batch, so the same multi-turn agents run at the
-   batch price.
+   through the Message Batches API (flush at N requests, at
+   `limits.batch_max_bytes`, or after T seconds; poll; route each result back
+   to its waiting caller by `custom_id`). Callers are unchanged: an agent
+   awaiting `create` does not know whether it was served online or by a
+   batch, so the same multi-turn agents run at the batch price. Results are
+   never lost or bought twice: each batch is recorded in the store
+   (`record_batch`) when created, every succeeded result is recorded and
+   cached even if its caller has gone, polling and result errors retry the
+   same batch, and a gateway collects batches earlier runs left open (a
+   request whose result is in one waits for it rather than being resent).
+   `aclose` does not wait for running batches; it leaves them recorded and
+   logs their ids. A batch the API rejects with a 4xx is split in half.
 
 `precis.llm.fake.FakeAnthropic` implements the parts of the SDK client the
-gateway uses (`messages.create`, `messages.with_raw_response.create`, the
-same under `beta.messages`, and `messages.batches`), returning real SDK
-`Message` objects. Behaviour comes from a list of responders
-(`Callable[[dict[str, Any]], FakeReply | None]`; the first non-`None` reply
-wins), plus a latency model, fault injection (429 with `retry-after`, 529,
-500, timeouts) and optional simulated server rate limits. Time comes from an
+gateway uses (`messages.stream`, `messages.create`,
+`messages.with_raw_response.create`, the same under `beta.messages`, and
+`messages.batches`), returning real SDK `Message` objects. Behaviour comes
+from a list of responders (`Callable[[dict[str, Any]], FakeReply | None]`;
+the first non-`None` reply wins), plus a latency model, fault injection (429
+with `retry-after`, 529, 500, timeouts, errors inside a started stream,
+Batches API outages and size limits) and optional simulated server rate
+limits. Time comes from an
 injectable `Clock`; a scaled clock runs a simulated hour in seconds, which is
 what makes the throughput benchmarks fast and deterministic.
 

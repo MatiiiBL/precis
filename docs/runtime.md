@@ -13,8 +13,8 @@ benchmarks) run without an API key, deterministically, in simulated time.
 | `store.py` | SQLite schema, migrations, typed reads and writes |
 | `llm/gateway.py` | `Gateway`, `GatewayStats`: the request path below |
 | `llm/limiter.py` | token buckets, the AIMD concurrency window, `Admission` |
-| `llm/batch.py` | batch mode: queue, flush, poll, route results |
-| `llm/pricing.py` | prices per model, `cost(usage, model, batch)` |
+| `llm/batch.py` | batch mode: queue, flush, poll, file every result, collect open batches |
+| `llm/pricing.py` | prices per model, `cost(usage, model, batch)`, `reply_cost(reply)` |
 | `llm/models.py` | which models support server-side fallbacks, and to what |
 | `llm/clock.py` | `Clock` protocol: real, scaled and manual time |
 | `llm/client.py` | the SDK surface the gateway uses (a `Protocol`), `make_client` |
@@ -26,18 +26,18 @@ benchmarks) run without an API key, deterministically, in simulated time.
 ```
 create(params, stage, paper_id)
   │
-  ├─ cache hit? ─────────────────────────────► LLMCall(status="cached", $0) ──► reply
-  ├─ budget: spent + in flight + estimate > max? ──► BudgetExceeded
+  ├─ cache hit (readable)? ──────────────────► LLMCall(status="cached", $0) ──► reply
+  ├─ budget: total spent + reserved + this reservation > max? ──► BudgetExceeded
   │
   ├─ online ─┬─ wait for a concurrency slot (AIMD window)
   │          ├─ wait for request / input / output token buckets
-  │          ├─ send via with_raw_response (beta endpoint + fallbacks if supported)
-  │          ├─ 429 / 529 / 5xx / timeout ─► back off, release, try again (≤ max_attempts)
+  │          ├─ stream it (beta endpoint + fallbacks if supported)
+  │          ├─ 429 / 529 / 5xx ─► back off, release, try again (≤ max_attempts; timeouts once)
   │          └─ correct the reservation from usage, learn limits from headers
   │
-  ├─ batch ──── queue ─► Message Batches API ─► poll ─► route result by custom_id
+  ├─ batch ──── queue ─► Message Batches API ─► poll ─► file every result ─► route by custom_id
   │
-  └─ LLMCall(cost from the serving model) ─► refusal? RefusalError : cache and return
+  └─ LLMCall(each attempt at its model) ─► refusal? RefusalError : cache (unless truncated)
 ```
 
 `params` are exactly the keyword arguments of `client.messages.create`, so
@@ -45,8 +45,26 @@ agent code builds requests the way the SDK documents them and the gateway
 never has to understand a prompt. The request hash is
 `sha256(canonical_json(params))`; a stored response for the same hash is
 returned without a request and recorded as a `cached` call that costs
-nothing and counts no tokens (no tokens were processed). Refusals and
-errors are never cached.
+nothing and counts no tokens (no tokens were processed).
+
+What goes into the cache matters as much as what comes out, because a bad
+entry replays forever:
+
+- Replies are stored with the API's field names (`to_dict`), the form
+  `model_validate` reads back. The first version stored SDK field names, and
+  a fallback's `fallback` block (field `from`, attribute `from_`) could then
+  never be read: every resume of that paper failed. A row that no longer
+  validates is now deleted, logged and treated as a miss.
+- Refusals, errors and replies cut off at `max_tokens` are never cached:
+  the caller retries those with different settings or gives up, and a
+  replay would only repeat the failure.
+- Requests are deterministic by design, so retrying a stage that failed on
+  model behaviour would replay the same replies. `Gateway.cache_scope(salt)`
+  mixes a salt into the hash of every request made inside the block (a
+  `ContextVar`, so tasks started inside inherit it): the scheduler wraps the
+  re-execution of a failed stage in `cache_scope(f"attempt-{n}")`, which gets
+  fresh replies, while a crash during that attempt still resumes from its
+  own entries. The empty salt is the plain hash, so existing rows stay valid.
 
 ## Store
 
@@ -134,8 +152,8 @@ request arriving while more than 24 are in flight (64 closed-loop clients,
 
 | Concurrency control | Successful requests/min | Responses that were 529 | Mean in flight |
 |---|---|---|---|
-| AIMD (8 → 64 ceiling) | 241 | 0.6 % | 18.1 |
-| Fixed at 64 | 307 | 53.5 % | 24.1 |
+| AIMD (8 → 64 ceiling) | 244 | 0.5 % | 18.2 |
+| Fixed at 64 | 309 | 52.2 % | 24.1 |
 
 A fixed window gets 27 % more through because the fake's overload answer is
 nearly free (0.1 s) and retries land in the gaps; it does so by sending about
@@ -154,13 +172,28 @@ pause other requests for `retry-after`, would not appear in `GatewayStats`
 or in `LLMCall.attempts`, and its wait would not run on the injectable clock
 the simulations depend on.
 
+Every request is streamed (`messages.stream`, then `get_final_message()`;
+the rate-limit headers come from the stream's response). A reply of 32,000
+output tokens with thinking can take many minutes, and a non-streaming
+request would sit on one HTTP read until `request_timeout_s` (600 s) cut it
+off, after the server had generated, and possibly billed, the tokens. With
+streaming the timeout bounds the wait for each chunk instead. The final
+message is rebuilt as a plain `Message` or `BetaMessage`, so a live reply
+and a cached one are the same type.
+
 | Outcome | Retried | Window | Wait |
 |---|---|---|---|
 | 429 | yes | halve | `retry-after` (+ up to 1 s jitter), all admissions paused |
 | 429 spend cap (`EnforcedSpendLimitReachedError`) | no | - | retrying cannot succeed until the cap resets |
-| 529 | yes | halve | full-jitter exponential backoff |
-| other 5xx, timeouts, connection errors | yes | unchanged | full-jitter exponential backoff |
+| 529, or an `overloaded_error` event inside a started stream | yes | halve | full-jitter exponential backoff |
+| other 5xx, `api_error` events, connection errors | yes | unchanged | full-jitter exponential backoff |
+| timeout | once | unchanged | full-jitter exponential backoff; the request id is logged |
 | other 4xx | no | unchanged | - |
+
+An error inside a stream that has already started arrives from the SDK as
+the base `APIStatusError` with status 200, so it is classified by its
+`type`. A timeout is retried only once: each timed-out attempt may have been
+generated and billed in full, and none of it would be recorded.
 
 Full jitter waits a uniformly random time in `[0, min(60 s, 1 s · 2^(n-1))]`
 before attempt `n + 1`, which spreads a burst of simultaneous failures
@@ -181,11 +214,28 @@ whose final `stop_reason` is `refusal` raises `RefusalError` with
 cached. Every model a fallback may route to is checked for a price when the
 gateway starts.
 
-`budget.max_cost_usd` is enforced before a request is sent: the gateway
-refuses with `BudgetExceeded` when the money already spent, plus the
-estimated cost of requests in flight, plus this request's estimate would
-cross the cap. Counting in-flight estimates keeps 64 concurrent requests
-from all passing the check at once and overshooting together.
+`budget.max_cost_usd` is a cap on the total spend recorded in the store,
+earlier runs included: the gateway starts from the sum of `usage()`
+(`total_spent_usd`; `spent_usd` is this run's share). So `--max-cost 150`,
+interrupted and resumed with `--max-cost 200`, spends at most $200, not
+$350. Before each request the gateway reserves what it may cost and refuses
+with `BudgetExceeded` when the total spent, plus the reservations of
+requests in flight, plus this one would cross the cap. Counting in-flight
+reservations keeps 64 concurrent requests from all passing the check at
+once.
+
+The reservation is deliberately not an average. Its uncached input is
+priced at the cache-write rate of the request's `cache_control` TTL (1.25x
+or 2x the input price), since that is what a cached prompt pays for its new
+part, and its output at the largest reply the stage has produced so far, or
+its whole `max_tokens` before the stage has produced one: the first reader
+turn on Claude Opus 5.5 at 16,000 tokens reserves $0.32. A cap that cannot
+fit even one such request says so in the error instead of quietly admitting
+nothing. The cap can still be overshot by replies longer than their
+reservation; the worst case is every request in flight writing its whole
+`max_tokens`, about `max_concurrency x max_tokens x output price` (64 x
+16,000 x $20/M ≈ $20 on Claude Opus 5.5, twice that for a turn retried at
+32,000 tokens).
 
 ## Pricing and accounting
 
@@ -196,25 +246,30 @@ are easy to get wrong: cache reads are 0.05x the input price on Claude
 Opus 5.5 and Sonnet 5.5 (not the usual 0.1x), and Claude Haiku 5.5 prices a
 whole request at a higher tier once its prompt (uncached, written and read
 tokens together) exceeds 100,000 tokens. The Batch API halves every price.
-A response is priced at the model that served it (`reply.model`), which
-after a fallback is not the model requested. A model with no price is a
+A reply is priced at the model that served it (`reply.model`), which after
+a fallback is not the model requested; when its `usage.iterations` lists
+several attempts (an attempt declined before a fallback, say), each is
+priced at its own model and the costs are summed, since top-level `usage`
+covers only the attempt that produced the reply. A model with no price is a
 configuration error when the gateway starts, never a free call.
 
-Every response becomes one `LLMCall` row: tokens by kind, cost, latency of
-the last attempt (or, in batch mode, from queueing to result), the number of
-attempts, the API request id, and whether it was a batch request. A known
-gap: with a server-side fallback, the declined attempt's tokens are listed
-in `usage.iterations`, but only the serving attempt (top-level `usage`) is
-priced, because whether a declined attempt is billed depends on when and why
-it declined.
+Each request becomes one `LLMCall` row: the reply that came back (status
+`ok` or `refusal`), a `cached` hit, or an `error` row when it failed for
+good. A row holds tokens by kind (top-level `usage`), the cost, the latency
+of the last attempt (or, in batch mode, from queueing to result), the
+number of attempts, the API request id, and whether it was a batch request.
+Failed attempts before a success are counted in `attempts`, not recorded as
+rows of their own.
 
 ## Batch mode
 
 `Gateway(mode="batch")` serves the same `create` calls through the Message
 Batches API at half price. Requests queue until `batch_max_requests` (500)
-are waiting or `batch_max_wait_s` (30 s) after the first one; the batch is
-then polled with doubling intervals from 10 s up to 120 s, its results are
-streamed, and each result resolves the caller waiting on its `custom_id`.
+are waiting, their serialized size reaches `batch_max_bytes` (200 MB, under
+the API's 256 MB), or `batch_max_wait_s` (30 s) after the first one; the
+batch is then polled with doubling intervals from 10 s up to 120 s, its
+results are streamed, and each result resolves the caller waiting on its
+`custom_id`.
 An agent awaiting `create` cannot tell the difference, so the multi-turn
 agents run unchanged: each turn is one request in some batch. The cost is
 latency, minutes per turn instead of seconds, which is acceptable for an
@@ -226,8 +281,35 @@ discount. `errored` items with a server-side error, `expired` and `canceled`
 items, and items missing from the results are requeued together once a
 batch's results have been read (so they share one batch instead of
 trickling into several); `errored` items with `invalid_request_error` would
-fail again and fail the caller at once. `aclose()` sends whatever is queued
-and waits for every batch to finish.
+fail again and fail the caller at once. If the API rejects a whole batch
+with a 4xx (too large, or one malformed request), the batch is split in half
+and each half sent on its own, down to the single request at fault, instead
+of resending the same set until every caller fails.
+
+**Results are paid for once a batch exists, so they are never thrown away.**
+The first version lost them three ways: a polling outage longer than about
+three minutes made it give up on a batch that was still running and send
+its requests again (paying twice); Ctrl-C cancelled the callers, and
+results that then arrived were dropped because only a waiting caller wrote
+the cache; and a connection reset while streaming results failed every
+caller. Now:
+
+- every batch is recorded in the store (`record_batch`: custom id, request
+  hash, stage and paper of each item) as soon as it is created, and closed
+  only when its results have been read;
+- every succeeded result is filed (an `LLMCall` row and a cache entry)
+  whether or not its caller is still waiting;
+- polling and result-stream errors retry the same batch with backoff up to
+  `batch_poll_max_s`, indefinitely; the stream is reopened and entries
+  already filed are skipped; items are requeued only once the batch has
+  ended without them, or the API says it no longer exists;
+- a gateway that starts on a store with open batches collects their results
+  in the background (in either mode), and a batch-mode request whose result
+  is in one of them waits for it instead of being sent again;
+- `aclose()` does not wait: unsent requests are dropped, running batches stay
+  recorded, and their ids are logged with a note that the next run collects
+  them. Before, it waited, silently and up to 24 hours, for every batch to
+  end after the progress view had closed.
 
 Measured with 200 concurrent callers, `batch_max_requests=100`, and a fake
 that errors 8 % and expires 4 % of batch items: the callers were served by
@@ -237,8 +319,9 @@ the same 200 requests online.
 
 ## The fake API
 
-`FakeAnthropic` implements `messages.create`, `messages.with_raw_response.create`,
-the same under `beta.messages`, and `messages.batches.{create,retrieve,results}`,
+`FakeAnthropic` implements `messages.stream`, `messages.create`,
+`messages.with_raw_response.create`, the same under `beta.messages`, and
+`messages.batches.{create,retrieve,results}`,
 and type-checks as the same `AsyncAnthropicLike` protocol as the real client.
 It returns the SDK's own `Message`, `BetaMessage` and `MessageBatch` objects
 and raises the SDK's own exception classes (`RateLimitError`,
@@ -260,7 +343,10 @@ models what the runtime reacts to:
   continuously, answer 429 with `retry-after`, and send the rate-limit
   headers on every response; `set_limits` changes them mid-run.
 - **Faults.** Random or scripted (`fail_next`) 429, 529, 500, timeouts and
-  400s; 529 above a concurrency threshold; errored and expired batch items.
+  400s; an error event or a timeout after a stream has started; 529 above a
+  concurrency threshold; errored and expired batch items; Batches API
+  outages on create, retrieve or mid-way through a results stream
+  (`fail_batch_api`); a 413 for batches over `max_batch_bytes`.
 - **Validation.** The documented 400s for request shapes current models
   reject (`temperature`/`top_p`/`top_k`, thinking budgets, forced
   `tool_choice` on Claude Opus 5.5), 404 for unknown models, and a
@@ -285,18 +371,20 @@ limit is learned from headers. At 450 s the fake halves its request limit.
 
 | Measure | Result |
 |---|---|
-| 429 responses | 0 of 6,144 |
-| Requests/min, 240-450 s (window settled) | 605 of 600 |
-| Requests/min, 60-450 s (includes the ramp) | 558 |
-| Input / output tokens/min, 240-450 s | 606K / 181K |
-| Time for the window to grow from 8 to 45 (enough for 600 RPM) | 176 s |
-| New 300 RPM limit adopted after the change | 1.9 s (the next response) |
-| 30-s windows after the change | mean 300 RPM, max 316 RPM, 0 429s |
+| 429 responses | 0 of 6,141 |
+| Requests/min, 240-450 s (window settled) | 604 of 600 |
+| Requests/min, 60-450 s (includes the ramp) | 557 |
+| Input / output tokens/min, 240-450 s | 605K / 181K |
+| Time for the window to grow from 8 to 45 (enough for 600 RPM) | 175 s |
+| New 300 RPM limit adopted after the change | 1.2 s (the next response) |
+| 30-s windows after the change | mean 300 RPM, max 312 RPM, 0 429s |
 | Failed requests | 0 |
 
-The client runs at the limit without a single 429 because it reads the
-limit from the first response and spends its burst conservatively; the
-0.8 % over in steady state is the 10-second burst spent on top of the refill,
+(Every request in this run is streamed; the numbers match the earlier
+non-streaming run to within scheduling jitter.) The client runs at the
+limit without a single 429 because it reads the limit from the first
+response and spends its burst conservatively; the 0.7 % over in steady
+state is the 10-second burst spent on top of the refill,
 which the server's full-minute bucket absorbs. The slow part is the
 additive increase from the initial window: raising `initial_concurrency`
 shortens the ramp at the risk of an early overload burst.
@@ -312,3 +400,10 @@ shortens the ramp at the risk of an early overload burst.
   the size of the work; use `cached_calls` to see how much was replayed.
 - The fake's cache model ignores the 20-block lookback window and the rule
   that an entry becomes readable only once its writer starts streaming.
+- An online run collects the results of batches an earlier run left open,
+  but does not wait for them: a request whose result is still in such a
+  batch is sent online too, and the batch result is filed when it arrives.
+- Two processes on the same store would both collect an open batch and
+  record its results twice; the store is meant for one writer.
+- `LLMCall` tokens are those of top-level `usage` (the attempt that produced
+  the reply); its cost includes every attempt in `usage.iterations`.
