@@ -458,6 +458,11 @@ def test_headings_wrapped_onto_a_second_line_are_joined() -> None:
         "5 Material mechanical properties",
         "Anisotropy",
         *prose("MATERIAL"),
+        # 2512.01193: a drop cap, extracted as its own line.
+        "6 Graph Preprocessing Algorithm",
+        "A",
+        "lgorithm 1 outlines the preprocessing, where the inputs are the graph and the",
+        *prose("GRAPH"),
     ]
     doc = parse(lines)
     assert [s.title for s in doc.sections] == [
@@ -466,6 +471,7 @@ def test_headings_wrapped_onto_a_second_line_are_joined() -> None:
         "Beyond CXL: Optimizing AI Resource Connectivity via Hybrid Link Architectures",
         "FFT Engine",
         "Material mechanical properties",
+        "Graph Preprocessing Algorithm",
     ]
     assert doc.sections[3].text.startswith("Theory of Operation FFT servers")
 

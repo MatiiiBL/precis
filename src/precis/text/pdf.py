@@ -810,8 +810,14 @@ def _continue_title(title: str, lines: list[str], i: int, doc: _Lines) -> tuple[
     # "Theory of Operation"). The fragment's length cap keeps out run-in
     # paragraphs that lost their spaces ("UltraAcceleratorLink. UALinkisan...").
     wrapped = len(lines[i]) >= 0.5 * doc.median_len and _title_case(title) and not _all_caps(title)
+    # It must hold a real word: a drop cap extracts as a lone "A" before
+    # "lgorithm 1 outlines ..." and is no part of the title.
     fragment = (
-        len(words) <= 4 and len(nxt) <= 40 and _title_case(nxt) and not _SENTENCE_END.search(nxt)
+        len(words) <= 4
+        and len(nxt) <= 40
+        and any(len(w) >= 3 and w[0].isalpha() for w in words)
+        and _title_case(nxt)
+        and not _SENTENCE_END.search(nxt)
     )
     prose_follows = i + 2 < len(lines) and _is_prose(lines[i + 2], doc)
     if wrapped and fragment and prose_follows and not _starts_heading(nxt):
