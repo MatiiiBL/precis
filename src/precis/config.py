@@ -1,0 +1,105 @@
+"""Run configuration, loaded from a TOML file (``precis.toml`` by default).
+
+Every field has a default, so an empty file (or none) is a valid
+configuration. Each section belongs to one package; see docs/design.md.
+"""
+
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field
+
+from precis import __version__
+from precis.models import Record
+
+DEFAULT_MODEL = "claude-opus-5-5"
+
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+
+
+class AgentConfig(Record):
+    """Model settings for one LLM role."""
+
+    model: str = DEFAULT_MODEL
+    effort: Effort = "medium"
+    max_tokens: int = Field(default=16000, gt=0, description="Per response.")
+    max_turns: int = Field(
+        default=10, gt=0, description="Tool-use turns before the agent must answer."
+    )
+    token_budget: int = Field(
+        default=80000,
+        gt=0,
+        description="Input + output tokens one agent run may spend before it is told to finish.",
+    )
+
+
+class AgentsConfig(Record):
+    reader: AgentConfig = AgentConfig()
+    critic: AgentConfig = AgentConfig()
+    synthesizer: AgentConfig = AgentConfig(effort="high", max_turns=1)
+    judge: AgentConfig = AgentConfig(effort="low", max_turns=1)
+    strategy: Literal["agentic", "fulltext", "mapreduce"] = "agentic"
+    include_abstract: bool = Field(
+        default=True, description="Show the author abstract to the reader (off for evaluation)."
+    )
+    revise: bool = Field(default=True, description="Rewrite summaries that fail verification once.")
+
+
+class LimitsConfig(Record):
+    """Client-side admission control for the Messages API."""
+
+    max_concurrency: int = Field(default=64, gt=0, description="Ceiling for adaptive concurrency.")
+    initial_concurrency: int = Field(default=8, gt=0)
+    rpm: int | None = Field(default=None, description="Requests/min; None = learn from headers.")
+    itpm: int | None = Field(default=None, description="Input tokens/min; None = learn.")
+    otpm: int | None = Field(default=None, description="Output tokens/min; None = learn.")
+    max_attempts: int = Field(default=8, gt=0)
+    request_timeout_s: float = Field(default=600.0, gt=0)
+
+
+class BudgetConfig(Record):
+    max_cost_usd: float | None = Field(
+        default=None, description="Stop admitting new work once spend reaches this; None = no cap."
+    )
+
+
+class FetchConfig(Record):
+    min_interval_s: float = Field(
+        default=3.0, ge=0, description="Gap between requests to arXiv (their published guidance)."
+    )
+    user_agent: str = f"precis/{__version__}"
+    prefer: Literal["html", "pdf"] = "html"
+    raw_dir: Path = Path("data/raw")
+
+
+class PipelineConfig(Record):
+    max_papers_in_flight: int = Field(default=64, gt=0)
+    use_cache: bool = Field(
+        default=True, description="Reuse stored responses for identical requests."
+    )
+    fallbacks: bool = Field(
+        default=True, description="Ask the API to retry refused requests on a fallback model."
+    )
+
+
+class Config(Record):
+    store_path: Path = Path("data/precis.db")
+    agents: AgentsConfig = AgentsConfig()
+    limits: LimitsConfig = LimitsConfig()
+    budget: BudgetConfig = BudgetConfig()
+    fetch: FetchConfig = FetchConfig()
+    pipeline: PipelineConfig = PipelineConfig()
+
+
+def load_config(path: Path | None = None) -> Config:
+    """Load ``path``, or ``precis.toml`` in the working directory if it exists."""
+    if path is None:
+        default = Path("precis.toml")
+        if not default.exists():
+            return Config()
+        path = default
+    with path.open("rb") as f:
+        return Config.model_validate(tomllib.load(f))
