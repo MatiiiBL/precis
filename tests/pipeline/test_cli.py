@@ -84,6 +84,39 @@ def test_ids_limit_stages_and_strategy(store_path: Path) -> None:
     store.close()
 
 
+def test_batch_mode_runs_offline_and_costs_less(store_path: Path) -> None:
+    online_store = store_path.with_name("online.db")
+    batch = precis(store_path, "run", "--offline", "--mode", "batch")
+    assert batch.exit_code == 0, batch.output
+    assert "4 of 4 papers finished" in batch.output
+    Store(online_store).close()
+    store = Store(store_path)
+    calls = store.calls()
+    assert calls
+    assert all(c.batch for c in calls)
+    batch_cost = sum(c.cost_usd for c in calls)
+    papers = store.list_papers()
+    store.close()
+
+    copy = Store(online_store)
+    for meta in papers:
+        copy.upsert_paper(meta)
+    source = Store(store_path)
+    for meta in papers:
+        doc = source.get_document(meta.id)
+        assert doc is not None
+        copy.put_document(doc)
+    source.close()
+    copy.close()
+    online = precis(online_store, "run", "--offline")
+    assert online.exit_code == 0, online.output
+    store = Store(online_store)
+    online_cost = sum(c.cost_usd for c in store.calls())
+    store.close()
+    # Half the token price, but fewer cache hits between turns minutes apart.
+    assert online_cost / 2 < batch_cost < online_cost
+
+
 def test_budget_flag(store_path: Path) -> None:
     result = precis(store_path, "run", "--offline", "--max-cost", "0.05")
     assert result.exit_code == 0, result.output

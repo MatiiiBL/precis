@@ -16,7 +16,7 @@ from rich.table import Table
 
 from precis.config import Config
 from precis.corpus.load import load_papers
-from precis.llm import Gateway, UnpricedModelError, make_client
+from precis.llm import Gateway, ScaledClock, UnpricedModelError, make_client
 from precis.models import Stage, StageStatus
 from precis.offline import offline_client
 from precis.pipeline import PIPELINE_STAGES, LiveProgress, Pipeline
@@ -24,6 +24,8 @@ from precis.store import Store
 
 console = Console()
 INTERRUPTED_EXIT_CODE = 130
+OFFLINE_TIME_SCALE = 600.0
+"""Simulated seconds per wall-clock second in ``--offline`` runs."""
 
 
 class Strategy(StrEnum):
@@ -106,10 +108,15 @@ def run_command(
         if not paper_ids:
             console.print("No papers in the store; run [bold]precis fetch[/bold] first.")
             raise typer.Exit(1)
-        client = offline_client() if offline else make_client(config)
+        # Offline, simulated time runs fast so that batch waits (minutes of
+        # queueing and polling) take a fraction of a second.
+        clock = ScaledClock(OFFLINE_TIME_SCALE) if offline else None
+        client = offline_client(clock=clock) if offline else make_client(config)
         try:
-            gateway = Gateway(client, store, run_id=new_run_id(), config=config, mode=mode.value)
-        except (NotImplementedError, UnpricedModelError) as e:
+            gateway = Gateway(
+                client, store, run_id=new_run_id(), config=config, clock=clock, mode=mode.value
+            )
+        except UnpricedModelError as e:
             console.print(f"[red]Cannot start the run:[/red] {e}")
             raise typer.Exit(2) from e
         pipeline = Pipeline(config, store, gateway)
