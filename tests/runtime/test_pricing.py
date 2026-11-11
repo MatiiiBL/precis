@@ -1,5 +1,6 @@
 import pytest
 from anthropic.types import Usage
+from anthropic.types.beta import BetaMessage
 
 from precis.config import DEFAULT_MODEL
 from precis.llm.pricing import (
@@ -9,6 +10,7 @@ from precis.llm.pricing import (
     check_priced,
     cost,
     estimate_cost,
+    reply_cost,
 )
 
 REQUIRED = [
@@ -87,3 +89,44 @@ def test_estimate_prices_expected_cache_reads() -> None:
         cost(usage(inp=1_000, out=1_000), "claude-opus-5-5")
     )
     assert set(REQUIRED) <= set(PRICES)
+
+
+def test_reply_cost_prices_every_iteration_at_its_own_model() -> None:
+    def iteration(kind: str, model: str | None, inp: int, out: int) -> dict[str, object]:
+        entry: dict[str, object] = {
+            "type": kind,
+            "input_tokens": inp,
+            "output_tokens": out,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        }
+        if model is not None:
+            entry["model"] = model
+        return entry
+
+    def reply(iterations: list[dict[str, object]] | None) -> BetaMessage:
+        return BetaMessage.model_validate(
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1000, "output_tokens": 500, "iterations": iterations},
+            }
+        )
+
+    fallback = reply(
+        [
+            iteration("message", "claude-opus-5-5", 1000, 200),
+            iteration("fallback_message", "claude-opus-5", 1000, 500),
+        ]
+    )
+    declined = (1000 * 4 + 200 * 20) / 1e6
+    served = (1000 * 5 + 500 * 25) / 1e6
+    assert reply_cost(fallback) == pytest.approx(declined + served)
+    assert reply_cost(fallback, batch=True) == pytest.approx((declined + served) / 2)
+    # Without iterations, or for entries with no model, the serving model prices it.
+    assert reply_cost(reply(None)) == pytest.approx(served)
+    assert reply_cost(reply([iteration("message", None, 1000, 500)])) == pytest.approx(served)

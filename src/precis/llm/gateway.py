@@ -33,7 +33,7 @@ from precis.llm.clock import Clock, RealClock
 from precis.llm.errors import BudgetExceeded, GatewayError, RefusalError
 from precis.llm.limiter import Admission, Outcome, Ticket, Usage
 from precis.llm.models import FALLBACK_BETA, FALLBACK_TARGETS, supports_fallbacks
-from precis.llm.pricing import check_priced, cost, estimate_cost
+from precis.llm.pricing import check_priced, estimate_cost, reply_cost
 from precis.models import LLMCall
 from precis.store import Store
 from precis.util import canonical_json, estimate_tokens, sha256_hex
@@ -499,7 +499,7 @@ class Gateway:
     ) -> Reply:
         reply = response.reply
         usage = reply.usage
-        usd = cost(usage, reply.model, batch=response.batch)
+        usd = reply_cost(reply, batch=response.batch)
         c = self._counters
         c.calls += 1
         c.batch_calls += response.batch

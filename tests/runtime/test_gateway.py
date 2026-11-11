@@ -205,7 +205,7 @@ async def test_refusal_raises_with_category(store: Store, clock: ManualClock) ->
     assert len(fake.requests) == 2
 
 
-async def test_fallback_serves_refusals_and_is_priced_by_serving_model(
+async def test_fallback_serves_refusals_and_each_attempt_is_priced_by_its_model(
     store: Store, clock: ManualClock
 ) -> None:
     def responder(params: dict[str, Any]) -> FakeReply:
@@ -225,7 +225,11 @@ async def test_fallback_serves_refusals_and_is_priced_by_serving_model(
     assert sent["fallbacks"] == "default"
     [call] = store.calls()
     assert call.model == "claude-opus-5"
-    assert call.cost_usd == pytest.approx(cost(reply.usage, "claude-opus-5"))
+    declined, served = reply.usage.iterations or []
+    assert (declined.type, served.type) == ("message", "fallback_message")
+    expected = cost(declined, "claude-opus-5-5") + cost(served, "claude-opus-5")
+    assert call.cost_usd == pytest.approx(expected)
+    assert call.cost_usd > cost(reply.usage, "claude-opus-5")
 
 
 async def test_fallbacks_are_not_sent_for_models_without_them(

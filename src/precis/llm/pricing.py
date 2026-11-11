@@ -21,6 +21,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from anthropic.types.beta import BetaUsage
+
+from precis.llm.base import Reply
+
 BATCH_DISCOUNT = 0.5
 """Multiplier applied to every token price for Message Batches API requests."""
 
@@ -138,6 +142,24 @@ def cost(usage: UsageLike, model: str, *, batch: bool = False) -> float:
         + cache_read * price.cache_read
     ) / 1_000_000
     return usd * BATCH_DISCOUNT if batch else usd
+
+
+def reply_cost(reply: Reply, *, batch: bool = False) -> float:
+    """USD cost of a reply, every attempt behind it included.
+
+    When ``usage.iterations`` is present (a server-side fallback, a server
+    tool loop) each entry is priced at its own model and they are summed;
+    top-level ``usage`` covers only the attempt that produced the returned
+    message, so pricing it alone would leave out a declined attempt.
+    Entries without a model ran on the model that served the reply.
+    """
+    usage = reply.usage
+    if isinstance(usage, BetaUsage) and usage.iterations:
+        return sum(
+            cost(entry, getattr(entry, "model", None) or reply.model, batch=batch)
+            for entry in usage.iterations
+        )
+    return cost(usage, reply.model, batch=batch)
 
 
 def estimate_cost(
