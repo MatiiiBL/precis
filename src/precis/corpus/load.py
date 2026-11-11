@@ -4,7 +4,7 @@ This is the only corpus module that knows how the pipeline lays out stage
 outputs (docs/design.md, section 1): the read stage holds the first summary,
 the verify stage its verification, and the revise stage, when it ran, a
 ``RevisionResult`` with the rewritten summary and its re-verification.
-Everything downstream works on ``PaperView`` objects.
+Everything downstream works on ``FinishedPaper`` objects.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from precis.store import Store
 
 
 @dataclass(frozen=True)
-class PaperView:
+class FinishedPaper:
     """One summarized paper, with its summary before and after revision."""
 
     meta: PaperMeta
@@ -57,8 +57,8 @@ def paper_view(
     read: StageRecord,
     verify: StageRecord | None,
     revise: StageRecord | None,
-) -> PaperView:
-    """Combine one paper's stage records into a ``PaperView``.
+) -> FinishedPaper:
+    """Combine one paper's stage records into a ``FinishedPaper``.
 
     ``read`` must be done; a verify or revise record that is missing or not
     done is treated as absent, so a paper stopped between stages still shows
@@ -72,12 +72,12 @@ def paper_view(
     draft_verification = None if verify_out is None else Verification.model_validate(verify_out)
     revise_out = _done_output(revise)
     if revise_out is None:
-        return PaperView(meta, draft, draft_verification, draft, draft_verification)
+        return FinishedPaper(meta, draft, draft_verification, draft, draft_verification)
     revision = RevisionResult.model_validate(revise_out)
-    return PaperView(meta, revision.summary, revision.verification, draft, draft_verification)
+    return FinishedPaper(meta, revision.summary, revision.verification, draft, draft_verification)
 
 
-def load_papers(store: Store) -> list[PaperView]:
+def load_papers(store: Store) -> list[FinishedPaper]:
     """Every paper whose read stage is done, ordered by id."""
     views = []
     for paper_id in sorted(store.papers_with_status(Stage.READ, StageStatus.DONE)):

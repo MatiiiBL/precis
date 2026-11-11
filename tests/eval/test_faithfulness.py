@@ -1,5 +1,5 @@
 from corpus.factories import make_meta, make_summary, make_verification, make_view
-from precis.corpus.load import PaperView
+from precis.corpus.load import FinishedPaper
 from precis.eval.faithfulness import (
     audit_quotes,
     evaluate_faithfulness,
@@ -37,14 +37,16 @@ def test_quotes_match_despite_wrapping_case_and_typography() -> None:
     assert not quote_found("...", text)
 
 
-def _view_with_evidence(paper_id: str, evidence: list[str], verdicts: list[Verdict]) -> PaperView:
+def _view_with_evidence(
+    paper_id: str, evidence: list[str], verdicts: list[Verdict]
+) -> FinishedPaper:
     summary = make_summary(paper_id, ["caches", "prefetching"])
     check = make_verification(summary, verdicts)
     checks = [
         c.model_copy(update={"evidence": e}) for c, e in zip(check.checks, evidence, strict=True)
     ]
     check = check.model_copy(update={"checks": checks})
-    return PaperView(make_meta(paper_id), summary, check, summary, check)
+    return FinishedPaper(make_meta(paper_id), summary, check, summary, check)
 
 
 def test_audit_counts_missing_and_empty_quotes() -> None:

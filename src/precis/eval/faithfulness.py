@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel
 
-from precis.corpus.load import PaperView
+from precis.corpus.load import FinishedPaper
 from precis.corpus.stats import VerdictCounts, faithfulness
 from precis.eval.results import markdown_table
 from precis.models import ClaimCheck, Document, PaperSummary, Verdict
@@ -62,7 +62,7 @@ class QuoteAudit(BaseModel):
         return self.not_found / quoted if quoted else 0.0
 
 
-def audit_quotes(papers: Sequence[PaperView], documents: Mapping[str, Document]) -> QuoteAudit:
+def audit_quotes(papers: Sequence[FinishedPaper], documents: Mapping[str, Document]) -> QuoteAudit:
     """Audit the evidence of every check (first drafts and revisions)."""
     checks = empty = missing = missing_supported = 0
     for paper in papers:
@@ -104,7 +104,7 @@ def _claim(summary: PaperSummary, target: str) -> str | None:
     return summary.findings[index].claim if 0 <= index < len(summary.findings) else None
 
 
-def revision_examples(papers: Sequence[PaperView], *, limit: int = 5) -> list[RevisionExample]:
+def revision_examples(papers: Sequence[FinishedPaper], *, limit: int = 5) -> list[RevisionExample]:
     """Failed claims from revised papers, with what the revision says instead.
 
     A revision may reorder or drop findings, so the revised claim shown is
@@ -157,7 +157,7 @@ class FaithfulnessEval(BaseModel):
 
 
 def evaluate_faithfulness(
-    papers: Sequence[PaperView], documents: Mapping[str, Document]
+    papers: Sequence[FinishedPaper], documents: Mapping[str, Document]
 ) -> FaithfulnessEval:
     faith = faithfulness(papers)
     return FaithfulnessEval(

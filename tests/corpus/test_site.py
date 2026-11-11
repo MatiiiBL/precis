@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from corpus.factories import make_view, themed_corpus
-from precis.corpus.load import PaperView
+from precis.corpus.load import FinishedPaper
 from precis.corpus.site import SiteContent, build_site
 from precis.corpus.stats import spend
 from precis.models import CorpusReport, Topic, TopicSynthesis, UsageRow, Verdict
@@ -12,7 +12,7 @@ from precis.models import CorpusReport, Topic, TopicSynthesis, UsageRow, Verdict
 S, C, U = Verdict.SUPPORTED, Verdict.CONTRADICTED, Verdict.UNSUPPORTED
 
 
-def _content(papers: list[PaperView]) -> SiteContent:
+def _content(papers: list[FinishedPaper]) -> SiteContent:
     half = len(papers) // 2
     topics = [
         Topic(id=1, label="Cache Replacement", description="Caches.", keywords=["cache"],

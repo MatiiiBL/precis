@@ -12,7 +12,7 @@ from typing import Any
 from anthropic.types import Message
 from pydantic import BaseModel
 
-from precis.corpus.load import PaperView
+from precis.corpus.load import FinishedPaper
 from precis.llm.base import Reply
 from precis.models import (
     ClaimCheck,
@@ -133,14 +133,14 @@ def make_view(
     draft_verdicts: list[Verdict] | None = None,
     revised: bool = False,
     title: str | None = None,
-) -> PaperView:
+) -> FinishedPaper:
     meta = make_meta(paper_id, title=title)
     draft = make_summary(paper_id, words)
     draft_check = make_verification(draft, draft_verdicts)
     if not revised:
-        return PaperView(meta, draft, draft_check, draft, draft_check)
+        return FinishedPaper(meta, draft, draft_check, draft, draft_check)
     final = make_summary(paper_id, words, revision=1)
-    return PaperView(meta, final, make_verification(final), draft, draft_check)
+    return FinishedPaper(meta, final, make_verification(final), draft, draft_check)
 
 
 def stage_record(
@@ -161,7 +161,7 @@ def stage_record(
     )
 
 
-def fill_store(store: Store, papers: list[PaperView]) -> None:
+def fill_store(store: Store, papers: list[FinishedPaper]) -> None:
     """Write papers the way the pipeline does: read, verify and revise records."""
     for paper in papers:
         store.upsert_paper(paper.meta)
@@ -174,10 +174,10 @@ def fill_store(store: Store, papers: list[PaperView]) -> None:
             store.set_stage(stage_record(paper.id, Stage.REVISE, None, StageStatus.SKIPPED))
 
 
-def themed_corpus(per_theme: int, *, seed: int = 0) -> tuple[list[PaperView], dict[str, str]]:
+def themed_corpus(per_theme: int, *, seed: int = 0) -> tuple[list[FinishedPaper], dict[str, str]]:
     """Papers drawn from ``THEMES``; also returns each paper's true theme."""
     rng = random.Random(seed)
-    papers: list[PaperView] = []
+    papers: list[FinishedPaper] = []
     truth: dict[str, str] = {}
     for t, (theme, vocabulary) in enumerate(sorted(THEMES.items())):
         for i in range(per_theme):

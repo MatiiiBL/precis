@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from precis.corpus.load import PaperView
+from precis.corpus.load import FinishedPaper
 from precis.corpus.markup import arxiv_links, link_citations, slugify
 from precis.corpus.stats import Faithfulness, Spend, corpus_facts
 from precis.corpus.synthesis import ReportStats
@@ -28,7 +28,7 @@ def _topic_heading(topic: Topic) -> str:
 def render_report(
     report: CorpusReport,
     topics: Sequence[Topic],
-    papers: Sequence[PaperView],
+    papers: Sequence[FinishedPaper],
     *,
     stats: ReportStats | None = None,
     faith: Faithfulness | None = None,

@@ -33,7 +33,7 @@ from typing import Any
 
 from jinja2 import Environment, PackageLoader, StrictUndefined, select_autoescape
 
-from precis.corpus.load import PaperView
+from precis.corpus.load import FinishedPaper
 from precis.corpus.markup import (
     arxiv_links,
     inline_html,
@@ -58,7 +58,7 @@ VERDICT_LABELS = {
 class SiteContent:
     """Everything the site shows. ``report`` and ``cost`` may be missing."""
 
-    papers: Sequence[PaperView]
+    papers: Sequence[FinishedPaper]
     topics: Sequence[Topic]
     report: CorpusReport | None = None
     cost: Spend | None = None
@@ -98,7 +98,7 @@ def _environment() -> Environment:
     return env
 
 
-def _claims(paper: PaperView) -> tuple[_Claim, list[_Claim]]:
+def _claims(paper: FinishedPaper) -> tuple[_Claim, list[_Claim]]:
     checks = {c.target: c for c in paper.verification.checks} if paper.verification else {}
     tldr = _Claim(paper.summary.tldr, checks.get("tldr"))
     findings = [

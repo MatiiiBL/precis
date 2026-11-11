@@ -39,7 +39,7 @@ from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import normalize
 
 from precis.config import AgentConfig, CorpusConfig
-from precis.corpus.load import PaperView
+from precis.corpus.load import FinishedPaper
 from precis.corpus.structured import request_structured, structured_params
 from precis.llm.base import ModelGateway
 from precis.models import PaperSummary, Topic
@@ -294,7 +294,7 @@ class ClusterBrief:
 
     size: int
     keywords: list[str]
-    central: list[PaperView]
+    central: list[FinishedPaper]
     other_keywords: list[list[str]]
 
 
@@ -334,7 +334,7 @@ TOPICS_ARTIFACT = "corpus/topics"
 
 async def build_topics(
     gw: ModelGateway,
-    papers: Sequence[PaperView],
+    papers: Sequence[FinishedPaper],
     config: CorpusConfig,
     agent: AgentConfig,
     *,

@@ -28,7 +28,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from precis.config import AgentConfig
-from precis.corpus.load import PaperView
+from precis.corpus.load import FinishedPaper
 from precis.corpus.structured import request_structured, structured_params
 from precis.llm.base import ModelGateway
 from precis.models import CorpusReport, Topic, TopicSynthesis
@@ -153,7 +153,7 @@ topics. Refer to topics by name. Do not cite individual papers. The title is \
 specific to this corpus, at most 12 words."""
 
 
-def compact_entry(paper: PaperView) -> str:
+def compact_entry(paper: FinishedPaper) -> str:
     """A paper as the synthesizer sees it: citation tag, title, tldr and findings."""
     lines = [f"{citation(paper.id)} {paper.meta.title}", f"TL;DR: {paper.summary.tldr}"]
     lines += [f"- {finding.claim}" for finding in paper.summary.findings]
@@ -273,7 +273,9 @@ class _Synthesizer:
         params = structured_params(self.agent, system=system, user=user, output=SynthesisDraft)
         return await request_structured(self.gw, params, SynthesisDraft, stage="synthesize")
 
-    async def run(self, topic: Topic, papers: Sequence[PaperView]) -> tuple[SynthesisDraft, int]:
+    async def run(
+        self, topic: Topic, papers: Sequence[FinishedPaper]
+    ) -> tuple[SynthesisDraft, int]:
         entries = [compact_entry(p) for p in papers]
         chunks = deal(entries, self.budget)
         if len(chunks) == 1:
@@ -351,7 +353,7 @@ def _finish(
 async def synthesize_topic(
     gw: ModelGateway,
     topic: Topic,
-    papers: Sequence[PaperView],
+    papers: Sequence[FinishedPaper],
     agent: AgentConfig,
     *,
     budget: int,
@@ -363,7 +365,7 @@ async def synthesize_topic(
 
 
 def intro_prompt(
-    topics: Sequence[Topic], syntheses: Sequence[TopicSynthesis], papers: Sequence[PaperView]
+    topics: Sequence[Topic], syntheses: Sequence[TopicSynthesis], papers: Sequence[FinishedPaper]
 ) -> str:
     categories = Counter(p.meta.primary_category for p in papers)
     top = sorted(categories.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
@@ -389,7 +391,7 @@ def _strip_citations(text: str) -> str:
 async def write_report(
     gw: ModelGateway,
     topics: Sequence[Topic],
-    papers: Sequence[PaperView],
+    papers: Sequence[FinishedPaper],
     agent: AgentConfig,
     *,
     budget: int,

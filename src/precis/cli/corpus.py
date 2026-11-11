@@ -20,7 +20,7 @@ from rich.console import Console
 from rich.table import Table
 
 from precis.config import Config
-from precis.corpus.load import PaperView, load_papers
+from precis.corpus.load import FinishedPaper, load_papers
 from precis.corpus.report import render_report
 from precis.corpus.site import SiteContent, build_site
 from precis.corpus.stats import faithfulness, spend
@@ -84,7 +84,7 @@ async def with_gateway[T](
     return result, gateway
 
 
-def require_papers(store: Store) -> list[PaperView]:
+def require_papers(store: Store) -> list[FinishedPaper]:
     papers = load_papers(store)
     if not papers:
         console.print("[red]No summarized papers in the store.[/] Run [bold]precis run[/] first.")

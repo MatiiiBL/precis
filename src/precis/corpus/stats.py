@@ -14,7 +14,7 @@ from datetime import date
 
 from pydantic import BaseModel
 
-from precis.corpus.load import PaperView
+from precis.corpus.load import FinishedPaper
 from precis.models import ClaimCheck, UsageRow, Verdict, Verification
 
 
@@ -68,7 +68,7 @@ class Faithfulness:
     """The revised papers only, after revision."""
 
 
-def faithfulness(papers: Sequence[PaperView]) -> Faithfulness:
+def faithfulness(papers: Sequence[FinishedPaper]) -> Faithfulness:
     revised = [p for p in papers if p.revised and p.verification is not None]
     return Faithfulness(
         papers=len(papers),
@@ -122,7 +122,7 @@ class CorpusFacts:
     """Primary categories by paper count, largest first."""
 
 
-def corpus_facts(papers: Sequence[PaperView]) -> CorpusFacts:
+def corpus_facts(papers: Sequence[FinishedPaper]) -> CorpusFacts:
     dates = sorted(p.meta.published for p in papers)
     categories = Counter(p.meta.primary_category for p in papers)
     return CorpusFacts(

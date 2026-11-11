@@ -6,7 +6,7 @@ import pytest
 
 from corpus.factories import ScriptedGateway, make_view
 from precis.config import AgentConfig
-from precis.corpus.load import PaperView
+from precis.corpus.load import FinishedPaper
 from precis.corpus.synthesis import (
     MERGE_SYSTEM,
     SYNTHESIS_SYSTEM,
@@ -22,11 +22,11 @@ from precis.models import Topic
 TAG = re.compile(r"\[arXiv:([^\]]+)\]")
 
 
-def _papers(n: int, prefix: str = "2507.") -> list[PaperView]:
+def _papers(n: int, prefix: str = "2507.") -> list[FinishedPaper]:
     return [make_view(f"{prefix}{i:05d}", ["cache replacement", "prefetching"]) for i in range(n)]
 
 
-def _topic(papers: list[PaperView], topic_id: int = 1) -> Topic:
+def _topic(papers: list[FinishedPaper], topic_id: int = 1) -> Topic:
     return Topic(
         id=topic_id,
         label="Cache Replacement",
