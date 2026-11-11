@@ -52,8 +52,19 @@ async def test_full_run_reads_verifies_and_revises_what_failed() -> None:
     assert not result.verification.needs_revision()
 
     faithfulness = stats["faithfulness"]
-    assert faithfulness["verified"] == 4
-    assert faithfulness["revised"] == 1
+    assert faithfulness["papers"] == 4
+    revised = faithfulness["revised"]
+    assert revised["papers"] == 1
+    # The revised subset is reported on its own, before and after, per claim.
+    assert revised["before"]["claims"] == len(result.draft_verification.checks)
+    assert revised["before"]["supported_rate"] < 1
+    assert revised["after"]["supported_rate"] == 1
+    final, first = faithfulness["final"], faithfulness["first_drafts"]
+    assert (
+        final["claims"]
+        == first["claims"] - revised["before"]["claims"] + revised["after"]["claims"]
+    )
+    assert final["supported_rate"] > first["supported_rate"]
     reader = stats["stages"]["read"]["agents"]
     assert reader["runs"] == 4
     # Paper 2 first submits a rounded number, which validation sends back.
@@ -72,7 +83,7 @@ async def test_full_run_reads_verifies_and_revises_what_failed() -> None:
 async def test_second_run_skips_everything_by_config_hash() -> None:
     s = setup()
     ids = add_papers(s.store, 3)
-    await s.pipeline("run-1").run(ids, ALL)
+    first = await s.pipeline("run-1").run(ids, ALL)
     requests = len(s.fake.requests)
     stats = await s.pipeline("run-2").run(ids, ALL)
     assert len(s.fake.requests) == requests
@@ -80,6 +91,8 @@ async def test_second_run_skips_everything_by_config_hash() -> None:
     assert stats["stages"]["verify"]["cached"] == 3
     assert stats["stages"]["revise"]["cached"] == 3
     assert stats["papers_finished"] == 3
+    # Cached stages count too: the same papers give the same verdict rates.
+    assert stats["faithfulness"] == first["faithfulness"]
 
 
 async def test_a_changed_setting_reruns_only_the_stages_it_affects() -> None:

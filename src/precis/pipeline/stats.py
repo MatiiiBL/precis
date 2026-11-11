@@ -10,9 +10,66 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from precis.agents.trace import AgentTrace
-from precis.models import Stage
+from precis.models import RevisionResult, Stage, Verdict, Verification
 
 PIPELINE_STAGES = (Stage.READ, Stage.VERIFY, Stage.REVISE)
+
+
+@dataclass
+class ClaimTally:
+    """Checked claims and how many were supported, summed over verifications."""
+
+    claims: int = 0
+    supported: int = 0
+
+    def add(self, verification: Verification) -> None:
+        self.claims += len(verification.checks)
+        self.supported += sum(c.verdict is Verdict.SUPPORTED for c in verification.checks)
+
+    def summary(self) -> dict[str, Any]:
+        rate = round(self.supported / self.claims, 4) if self.claims else None
+        return {"claims": self.claims, "supported": self.supported, "supported_rate": rate}
+
+
+@dataclass
+class Faithfulness:
+    """Per-claim verdict rates over every paper of the run that has a verification.
+
+    Cached stages count as well as stages that ran, so the population is the
+    run's papers, not whatever happened to run in this invocation. The revised
+    subset is reported before and after revision on its own, because those
+    papers start far below the rest.
+    """
+
+    papers: int = 0
+    first_drafts: ClaimTally = field(default_factory=ClaimTally)
+    final: ClaimTally = field(default_factory=ClaimTally)
+    revised_papers: int = 0
+    revised_before: ClaimTally = field(default_factory=ClaimTally)
+    revised_after: ClaimTally = field(default_factory=ClaimTally)
+
+    def add(self, first: Verification, revision: RevisionResult | None) -> None:
+        self.papers += 1
+        self.first_drafts.add(first)
+        if revision is None:
+            self.final.add(first)
+            return
+        self.final.add(revision.verification)
+        self.revised_papers += 1
+        self.revised_before.add(first)
+        self.revised_after.add(revision.verification)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "papers": self.papers,
+            "final": self.final.summary(),
+            "first_drafts": self.first_drafts.summary(),
+            "revised": {
+                "papers": self.revised_papers,
+                "before": self.revised_before.summary(),
+                "after": self.revised_after.summary(),
+            },
+        }
 
 
 @dataclass
@@ -52,8 +109,7 @@ class RunStats:
     papers_finished: int = 0
     papers_blocked: int = 0
     """Papers with no document, or whose earlier stage has not succeeded."""
-    supported_before: list[float] = field(default_factory=list)
-    supported_after: list[float] = field(default_factory=list)
+    faithfulness: Faithfulness = field(default_factory=Faithfulness)
     interrupted: bool = False
     budget_reached: bool = False
 
@@ -79,12 +135,7 @@ class RunStats:
             "budget_reached": self.budget_reached,
             "elapsed_s": round(self.elapsed_s, 3),
             "stages": stages,
-            "faithfulness": {
-                "verified": len(self.supported_before),
-                "supported_before": _mean(self.supported_before),
-                "revised": len(self.supported_after),
-                "supported_after_revision": _mean(self.supported_after),
-            },
+            "faithfulness": self.faithfulness.summary(),
             "gateway": gateway,
         }
 

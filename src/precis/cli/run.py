@@ -145,14 +145,20 @@ def _print_run_summary(run_id: str, stats: dict[str, Any]) -> None:
         f"${gateway['cost_usd']:.4f}."
     )
     faithfulness = stats["faithfulness"]
-    if faithfulness["verified"]:
-        line = f"Supported claims: {faithfulness['supported_before']:.0%} of first drafts"
-        if faithfulness["revised"]:
-            line += (
-                f"; {faithfulness['supported_after_revision']:.0%} after revising "
-                f"{faithfulness['revised']} summaries"
-            )
-        console.print(line + ".")
+    final, first = faithfulness["final"], faithfulness["first_drafts"]
+    if final["claims"]:
+        console.print(
+            f"Final summaries of {faithfulness['papers']:,} papers: "
+            f"{final['supported_rate']:.1%} of {final['claims']:,} checked claims supported "
+            f"(first drafts: {first['supported_rate']:.1%})."
+        )
+    revised = faithfulness["revised"]
+    if revised["papers"]:
+        console.print(
+            f"Revised {revised['papers']:,} summaries: "
+            f"{revised['before']['supported_rate']:.1%} of their claims supported before, "
+            f"{revised['after']['supported_rate']:.1%} after."
+        )
     if stats["budget_reached"]:
         console.print("[yellow]The budget was reached; run again to finish the rest.[/yellow]")
     if stats["interrupted"]:

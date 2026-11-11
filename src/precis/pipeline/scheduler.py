@@ -66,6 +66,7 @@ class _Paper:
     doc: Document
     summary: PaperSummary | None = None
     verification: Verification | None = None
+    revision: RevisionResult | None = None
     _index: PassageIndex | None = field(default=None, repr=False)
 
     @property
@@ -197,6 +198,8 @@ class Pipeline:
             pass
         else:
             self.stats.papers_finished += 1
+        if paper.verification is not None:
+            self.stats.faithfulness.add(paper.verification, paper.revision)
 
     async def _stage(self, paper: _Paper, stage: Stage, *, run: bool) -> None:
         """Bring one stage up to date, or load its stored result when ``run`` is off.
@@ -249,6 +252,8 @@ class Pipeline:
             paper.summary = PaperSummary.model_validate(record.output)
         elif stage is Stage.VERIFY:
             paper.verification = Verification.model_validate(record.output)
+        else:
+            paper.revision = RevisionResult.model_validate(record.output)
 
     async def _execute(
         self, paper: _Paper, stage: Stage, config_hash: str, previous: StageRecord | None
@@ -312,7 +317,6 @@ class Pipeline:
             )
             tally.traces.append(verified.trace)
             paper.verification = verified.value
-            self.stats.supported_before.append(verified.value.supported_fraction())
             return verified.value
         assert paper.verification is not None
         revised = await run_reviser(
@@ -328,8 +332,8 @@ class Pipeline:
             gw, paper.meta, paper.doc, revised.value, agents, stage="revise", index=paper.index()
         )
         tally.traces += [revised.trace, checked.trace]
-        self.stats.supported_after.append(checked.value.supported_fraction())
-        return RevisionResult(summary=revised.value, verification=checked.value)
+        paper.revision = RevisionResult(summary=revised.value, verification=checked.value)
+        return paper.revision
 
     # ------------------------------------------------------------------
     # records
