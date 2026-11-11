@@ -30,6 +30,7 @@ from precis.sources.http import FetchError
 from precis.sources.local import LocalPaper, load_pdf, local_id
 from precis.store import Store
 from precis.text.document import ParseError
+from precis.text.normalize import fix_surrogates
 from precis.util import canonical_json, sha256_hex
 
 logger = logging.getLogger(__name__)
@@ -158,17 +159,19 @@ class FetchRunner:
     async def _fetch_one(self, fetcher: FullTextFetcher, meta: PaperMeta) -> None:
         attempts = self._attempts(meta.id) + 1
         self._set(meta.id, StageStatus.RUNNING, attempts)
+        # Storing the result is inside the try too: anything that goes wrong
+        # with one paper, down to a document the store cannot serialize, is
+        # that paper's failure, never the end of the command.
         try:
             full = await fetcher.fetch(meta)
+            if full.license and full.license != meta.license:
+                self.store.upsert_paper(meta.model_copy(update={"license": full.license}))
+            self._done(full.document, attempts, full.fallback_reason, meta.version)
         except asyncio.CancelledError:
             self._set(meta.id, StageStatus.PENDING, attempts - 1)
             raise
         except Exception as exc:
             self._fail(meta.id, attempts, exc)
-            return
-        if full.license and full.license != meta.license:
-            self.store.upsert_paper(meta.model_copy(update={"license": full.license}))
-        self._done(full.document, attempts, full.fallback_reason, meta.version)
 
     async def _load_one(self, path: Path) -> None:
         try:
@@ -183,14 +186,13 @@ class FetchRunner:
         self._set(paper_id, StageStatus.RUNNING, attempts)
         try:
             paper: LocalPaper = await asyncio.to_thread(load_pdf, path)
+            self.store.upsert_paper(paper.meta)
+            self._done(paper.document, attempts, None, None)
         except asyncio.CancelledError:
             self._set(paper_id, StageStatus.PENDING, attempts - 1)
             raise
         except Exception as exc:
             self._fail(paper_id, attempts, exc, source=path)
-            return
-        self.store.upsert_paper(paper.meta)
-        self._done(paper.document, attempts, None, None)
 
     def _done(
         self, doc: Document, attempts: int, fallback_reason: str | None, version: int | None
@@ -220,6 +222,8 @@ class FetchRunner:
             # it is recorded with its type and logged with the traceback.
             logger.exception("unexpected error fetching %s", source or paper_id)
             reason = f"{type(exc).__name__}: {exc}"
+        # The reason can quote the paper's text; it must be storable too.
+        reason = fix_surrogates(reason)
         self._set(paper_id, StageStatus.FAILED, attempts, error=reason)
         self._report(Outcome(paper_id, "failed", reason))
 

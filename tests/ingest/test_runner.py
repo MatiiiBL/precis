@@ -142,6 +142,27 @@ async def test_an_unexpected_error_fails_one_paper_not_the_run(store: Store) -> 
     assert runner.stats.counts["html"] == 1
 
 
+async def test_a_document_the_store_cannot_write_fails_that_paper_only(store: Store) -> None:
+    """The real fetch died on 2512.14151: store.put_document raised for one paper and
+    the error escaped the per-paper handling, ending the whole command."""
+    broken = parse_html(paper_html(), "2507.00001")
+    lone_surrogate = chr(0xD835)
+    sections = [
+        s.model_copy(update={"text": f"{s.text} {lone_surrogate}"}) for s in broken.sections
+    ]
+    unstorable = FullText(broken.model_copy(update={"sections": sections}), None, None)
+    papers = [_meta("2507.00001"), _meta("2507.00002")]
+    fetcher = StubFetcher({"2507.00001": unstorable, "2507.00002": _full_text("2507.00002")})
+    runner = _runner(store)
+    await runner.fetch_arxiv(fetcher, papers)
+    failed = _stage(store, "2507.00001")
+    assert failed.status is StageStatus.FAILED
+    assert "surrogates not allowed" in (failed.error or "")
+    assert store.get_document("2507.00001") is None
+    assert _stage(store, "2507.00002").status is StageStatus.DONE
+    assert runner.stats.counts == {"failed": 1, "html": 1}
+
+
 async def test_an_interrupted_paper_goes_back_to_pending(store: Store) -> None:
     started = asyncio.Event()
 
