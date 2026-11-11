@@ -6,9 +6,14 @@ already in the conversation, and either calls tools or submits. The reader
 opens the introduction, the method and the results and builds its summary
 from their sentences; the critic reads the cited sections and quotes the
 sentence that best matches each claim; the reviser re-reads the failed
-claims' sections and replaces them with what the paper says. For one paper
-in four (by title hash) the reader misattributes a number in its last
-finding, so offline runs exercise verification and revision too.
+claims' sections and replaces them with what the paper says.
+
+So that offline runs exercise every correction path, the reader makes two
+kinds of mistake, each on one paper in four (by title hash): it swaps two
+numbers in a finding, which passes validation (both numbers are in the
+paper) and is caught by the critic and fixed by the reviser; or it rounds
+a number in its first submission, which validation rejects and the reader
+then corrects.
 
 The responses are real ``anthropic.types.Message`` objects (with zero usage,
 which ``FakeAnthropic`` replaces with its prompt-cache model), so the
@@ -23,7 +28,7 @@ import re
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from anthropic.types import Message
 
@@ -34,6 +39,7 @@ from precis.agents.submissions import MAX_TLDR_WORDS, SUBMIT_SUMMARY_NAME
 from precis.util import canonical_json, sha256_hex
 
 OfflineResponder = Callable[[dict[str, Any]], Message | None]
+Mistake = Literal["swap", "round"]
 
 _ID = r"[a-z]+\d+(?:\.\d+)*"
 _OUTLINE_LINE = re.compile(rf"^\s*({_ID})  (.+?)  \((.+)\)$", re.MULTILINE)
@@ -44,6 +50,7 @@ _HEADED_BLOCK = re.compile(rf"^\[({_ID})\] (.*?)(?:\n\n|$)(.*)", re.DOTALL)
 _NOTE_LINE = re.compile(rf"^\[({_ID})\] (.+)$", re.MULTILINE)
 _SEARCH_HIT = re.compile(rf"^\d+\. \[({_ID})\][^\n]*\n(.+)", re.DOTALL)
 _WORD = re.compile(r"[a-z0-9]+(?:\.\d+)?")
+_RAW_NUMBER = re.compile(r"(?<![\w.])\d+(?:,\d{3})*(?:\.\d+)?")
 
 _INTRO = re.compile(r"intro|overview|motivation", re.IGNORECASE)
 _METHOD = re.compile(r"method|approach|design|architecture|model|system|framework", re.IGNORECASE)
@@ -204,8 +211,8 @@ def _pick(passages: list[_Passage], pattern: re.Pattern[str]) -> _Passage | None
     return next((p for p in passages if pattern.search(p.title)), None)
 
 
-def _draft(passages: list[_Passage], *, misattribute: bool = False) -> dict[str, Any]:
-    """A summary built from the sentences of what was read."""
+def _draft(passages: list[_Passage], *, mistake: Mistake | None = None) -> dict[str, Any]:
+    """A summary built from the sentences of what was read, with an optional mistake."""
     passages = [p for p in passages if p.text.strip()]
     if not passages:
         passages = [_Passage("", "", "The paper has no readable text.")]
@@ -222,8 +229,10 @@ def _draft(passages: list[_Passage], *, misattribute: bool = False) -> dict[str,
     findings = [{"claim": s, "section_ids": [sid] if sid else []} for sid, s in chosen]
     while len(findings) < 2:
         findings.append({"claim": intro_sentences[0], "section_ids": [intro.section_id]})
-    if misattribute:
-        _misattribute(findings[-1], [s for _, s in _sentences(passages)])
+    if mistake == "swap":
+        _swap_numbers(findings)
+    elif mistake == "round":
+        _round_number(findings)
 
     text = " ".join(p.text for p in passages)
     words = Counter(w for w in re.findall(r"[a-z]{5,}", text.lower()) if w not in _STOPWORDS)
@@ -242,21 +251,49 @@ def _draft(passages: list[_Passage], *, misattribute: bool = False) -> dict[str,
     }
 
 
-def _misattribute(finding: dict[str, Any], sentences: list[str]) -> None:
-    """Swap the claim's first number for another number from the paper."""
-    claim = finding["claim"]
-    own = numbers_in(claim)
-    if not own:
-        return
-    elsewhere = [n for s in sentences for n in numbers_in(s) if n not in own]
-    if elsewhere:
-        finding["claim"] = re.sub(
-            rf"(?<![\w.]){re.escape(own[0])}(?![\d])", elsewhere[0], claim, count=1
+def _significant_numbers(text: str) -> list[re.Match[str]]:
+    """Number tokens that validation would require to appear in the paper."""
+    return [m for m in _RAW_NUMBER.finditer(text) if numbers_in(m.group())]
+
+
+def _swap_numbers(findings: list[dict[str, Any]]) -> None:
+    """Swap the first two different numbers of the last finding that has two."""
+    for finding in reversed(findings):
+        claim = finding["claim"]
+        tokens = _significant_numbers(claim)
+        second = next((t for t in tokens[1:] if t.group() != tokens[0].group()), None)
+        if second is None:
+            continue
+        first = tokens[0]
+        finding["claim"] = (
+            claim[: first.start()]
+            + second.group()
+            + claim[first.end() : second.start()]
+            + first.group()
+            + claim[second.end() :]
         )
+        return
 
 
-def _misattributes(title: str) -> bool:
-    return int(sha256_hex(title)[:8], 16) % 4 == 0
+def _round_number(findings: list[dict[str, Any]]) -> None:
+    """Round the first decimal above the small-integer threshold, e.g. 23.4 -> 23."""
+    for finding in findings:
+        claim = finding["claim"]
+        for token in _significant_numbers(claim):
+            whole, dot, _ = token.group().partition(".")
+            if dot and numbers_in(whole):
+                finding["claim"] = claim[: token.start()] + whole + claim[token.end() :]
+                return
+
+
+def _mistake(title: str) -> Mistake | None:
+    bucket = int(sha256_hex(title)[:8], 16) % 4
+    return "swap" if bucket == 0 else "round" if bucket == 1 else None
+
+
+def _in_order(sub: list[str], seq: list[str]) -> bool:
+    remaining = iter(seq)
+    return all(item in remaining for item in sub)
 
 
 # -- responses ---------------------------------------------------------------
@@ -322,8 +359,10 @@ def reader(params: dict[str, Any]) -> Message | None:
             params, [_call("read_section", {"section_id": s, "page": 1}) for s in picks]
         )
     title = re.search(r"^Title: (.*)$", brief, re.MULTILINE)
-    misattribute = title is not None and _misattributes(title.group(1))
-    draft = _draft(_read_passages(exchanges), misattribute=misattribute)
+    mistake = _mistake(title.group(1)) if title else None
+    if mistake == "round" and any(ex.name == SUBMIT_SUMMARY_NAME for ex in exchanges):
+        mistake = None  # the rounded number was rejected; submit the exact one
+    draft = _draft(_read_passages(exchanges), mistake=mistake)
     return _tool_turn(params, [_call(SUBMIT_SUMMARY_NAME, draft)])
 
 
@@ -348,11 +387,14 @@ def critic(params: dict[str, Any]) -> Message | None:
 
 def _check(target: str, claim: str, sentences: list[tuple[str, str]]) -> dict[str, Any]:
     section_id, sentence, score = _best_match(claim, sentences)
-    missing = [n for n in numbers_in(claim) if n not in numbers_in(sentence)]
+    claimed, stated = numbers_in(claim), numbers_in(sentence)
+    missing = [n for n in claimed if n not in stated]
     if score < 0.3:
         verdict, note = "unsupported", "No passage in the cited sections states this."
-    elif missing and numbers_in(sentence):
+    elif missing and stated:
         verdict, note = "contradicted", f"The paper gives a different figure than {missing[0]}."
+    elif not _in_order(claimed, stated):
+        verdict, note = "contradicted", "The paper attributes these figures differently."
     elif missing or score < 0.6:
         verdict, note = "partial", "Only part of the claim is stated in the paper."
     else:

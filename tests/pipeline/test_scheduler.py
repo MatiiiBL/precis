@@ -29,7 +29,7 @@ async def test_full_run_reads_verifies_and_revises_what_failed() -> None:
     assert stats["papers_finished"] == 4
     assert stats["stages"]["read"]["done"] == 4
     assert stats["stages"]["verify"]["done"] == 4
-    # Paper 0 gets a misattributed number from the offline reader.
+    # The offline reader swaps two numbers in one of paper 0's findings.
     assert stats["stages"]["revise"]["done"] == 1
     assert stats["stages"]["revise"]["skipped"] == 3
     assert status(s, ids[0], Stage.REVISE) is StageStatus.DONE
@@ -54,7 +54,9 @@ async def test_full_run_reads_verifies_and_revises_what_failed() -> None:
     assert faithfulness["revised"] == 1
     reader = stats["stages"]["read"]["agents"]
     assert reader["runs"] == 4
-    assert reader["requests_mean"] == 2
+    # Paper 2 first submits a rounded number, which validation sends back.
+    assert reader["rejected_submissions"] == 1
+    assert reader["requests_mean"] == 2.25
     assert 0 < reader["fraction_read_mean"] <= 1
 
     [run] = s.store.runs()

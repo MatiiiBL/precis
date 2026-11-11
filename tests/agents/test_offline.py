@@ -14,10 +14,12 @@ from precis.store import Store
 
 from .helpers import KeywordIndex, agents_config, make_doc, make_meta
 
-# The offline reader misattributes a number for one title in four; this one
-# is such a title, and the second is not.
-MISATTRIBUTED = "ReuseNet: Learned Reuse Prediction for Last-Level Caches"
-FAITHFUL = MISATTRIBUTED + " Revisited"
+# The offline reader makes a deliberate mistake on half of the titles (by
+# hash): it swaps two numbers in a finding, or rounds one in its first
+# submission. These three titles fall in each bucket.
+SWAPPED = "ReuseNet: Learned Reuse Prediction for Last-Level Caches"
+ROUNDED = SWAPPED + " Revisited"
+FAITHFUL = SWAPPED + " (extended)"
 
 
 @pytest.fixture
@@ -46,11 +48,19 @@ async def test_reader_reads_a_few_sections_and_submits_a_valid_summary(gateway: 
     assert stats.cache_read_input_tokens > 0  # the second turn reads the first from cache
 
 
-async def test_verify_and_revise_repair_a_misattributed_number(gateway: Gateway) -> None:
-    meta = make_meta(title=MISATTRIBUTED)
+async def test_a_rounded_number_is_rejected_and_corrected(gateway: Gateway) -> None:
+    summary, trace = await summarize(gateway, make_meta(title=ROUNDED))
+    assert trace.requests == 3
+    assert trace.rejected_submissions == 1
+    assert "18.4%" in summary.findings[0].claim
+
+
+async def test_verify_and_revise_repair_swapped_numbers(gateway: Gateway) -> None:
+    meta = make_meta(title=SWAPPED)
     doc = make_doc()
     config = agents_config()
     summary, _ = await summarize(gateway, meta)
+    assert any("by 1.9% over LRU and by 6.2% over Hawkeye" in f.claim for f in summary.findings)
     first = (await run_critic(gateway, meta, doc, summary, config, index=KeywordIndex(doc))).value
     assert first.needs_revision()
     assert any(c.verdict is Verdict.CONTRADICTED for c in first.checks)

@@ -22,7 +22,7 @@ TOPICS = ["cache replacement", "branch prediction", "memory compression", "netwo
 def paper(i: int, title: str | None = None) -> tuple[PaperMeta, Document]:
     """A small, distinct paper; its numbers depend on ``i``."""
     topic = TOPICS[i % len(TOPICS)]
-    gain, cost = 10 + 3.5 * i, 20 + i
+    gain, cost = 14.5 + 3.5 * i, 20 + i
     texts = {
         "Introduction": (
             f"Hardware for {topic} is a bottleneck in modern processors. "
@@ -33,8 +33,8 @@ def paper(i: int, title: str | None = None) -> tuple[PaperMeta, Document]:
             f"Each entry stores a {cost}-bit confidence counter."
         ),
         "Results": (
-            f"Design{i} improves performance by {gain}% over the baseline on SPEC CPU2017. "
-            f"It costs {cost} KB of storage."
+            f"Design{i} improves performance by {gain}% over the baseline on SPEC CPU2017, "
+            f"at a storage cost of {cost} KB. It needs no changes to the instruction set."
         ),
         "Conclusion": f"Design{i} is practical. However, it was evaluated only in simulation.",
     }
