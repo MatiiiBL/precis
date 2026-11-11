@@ -344,17 +344,20 @@ async def revise_summary(gw: Gateway, meta: PaperMeta, doc: Document, summary: P
 
 ```
 precis fetch arxiv --category cs.AR [--category ...] --since 2025-07-01 [--until ...] [--limit N]
-precis fetch ids 2406.01234 ...
-precis fetch local <dir>
+                   [--metadata-only]
+precis fetch ids 2406.01234 ... [--metadata-only]
+precis fetch local <dir> [--limit N]
 precis run [--stages read,verify,revise] [--strategy agentic|fulltext|mapreduce]
            [--limit N] [--ids ...] [--mode online|batch] [--max-cost USD] [--offline]
 precis status
-precis topics [--k N]
-precis report [--out reports/<name>.md]
+precis topics [--k N] [--offline]
+precis report [--out reports/<name>.md] [--offline]
 precis site [--out build/site]
-precis export --out summaries.jsonl
-precis eval abstract|faithfulness|ablation [--n N]
-precis bench throughput|faults
+precis export [--out summaries.jsonl]
+precis eval abstract|ablation [--n N] [--offline]
+precis eval faithfulness
+precis bench throughput [--papers N] [--concurrency C ...]
+precis bench faults [--papers N]
 ```
 
 Global options: `--config` (TOML, default `./precis.toml`), `--store`,

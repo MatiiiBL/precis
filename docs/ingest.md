@@ -377,6 +377,32 @@ Configuration (`[fetch]` in `precis.toml`):
 | `max_attempts` | 5 | per request, and per empty page |
 | `timeout_s` | 60 | per request |
 
+## The full corpus
+
+`precis fetch arxiv --category cs.AR --since 2025-07-01 --until 2026-10-31`,
+run on 2026-11-11. The store and the raw files stay out of the repository;
+the counts below come from the store's `fetch` stage records.
+
+| | |
+|---|---|
+| Papers found | **2,918** |
+| Full text from HTML | **2,670 (91.5%)** |
+| Full text from PDF | 226 (7.7%): 211 have no HTML version; 15 HTML pages failed the quality gate (11 with words run together, 4 with no body text) |
+| Failed | 22 (0.8%): 10 withdrawn (no PDF and no HTML), 7 PDFs whose text decodes to garbage (2-4% common English function words), 3 with under 500 tokens of body text, 2 PDFs with corrupted characters or lost word spacing |
+| Download | 2,272 requests in 1 h 55 min for the run that finished it (3.0 s each), after a first run that stopped at 820 papers (the surrogate crash below) |
+| Raw files | 545 MB: HTML 125 MB (gzipped), 238 PDFs 420 MB |
+
+Document size in tokens, over the 2,896 parsed papers:
+
+| min | p10 | p25 | median | p75 | p90 | p99 | max | mean |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 798 | 3,871 | 5,885 | **8,670** | 13,021 | 16,253 | 37,323 | 129,035 | 10,131 |
+
+29.3 million tokens in all; 132 documents are over 20,000 tokens and 19
+over 40,000 (theses and long surveys). A document has a median of 21
+sections and 12 captions. The 50-paper sample above predicted the shape
+well: a median of 8,283 tokens and 94% HTML against 8,670 and 91.5%.
+
 ## After the full run: parser version 2
 
 A review of the first papers of the full cs.AR run found four parsing
@@ -395,7 +421,10 @@ next time a fetch command runs; nothing is downloaded again (missing HTML
 is remembered, and cached HTML that was rejected falls back to the cached
 PDF). When version 2 was made, the running store had 721 papers fetched
 (648 HTML, 73 PDF). Re-parsing all of them took about a minute and
-changed 23 documents; the other 698 came out identical:
+changed 23 documents; the other 698 came out identical (over the whole
+corpus, once the fetch had finished, re-parsing all 2,918 papers took 3.5
+minutes and 25 requests to arXiv, and changed 92 of the 2,896 documents:
+59 PDF, 33 HTML; 51 of the changes are PDF outlines):
 
 - 14 PDF outlines: the table of contents above; wrapped titles completed in
   six papers; a missed subsection found (2509.04173); the reference list
