@@ -324,15 +324,12 @@ def throughput_figure(result: ThroughputResult, path: Path) -> Path:
         Series("p50", [p.paper_latency_p50_s / 60 for p in result.points]),
         Series("p95", [p.paper_latency_p95_s / 60 for p in result.points]),
     ]
-    window = [
-        Series("ceiling", [float(p.concurrency) for p in result.points]),
-        Series("adaptive window", [float(p.final_concurrency_limit) for p in result.points]),
-    ]
+    run_time = Series("run", [p.simulated_minutes for p in result.points])
     panels = [
         Panel("Papers per minute", "papers/min", [papers]),
         Panel("Achieved rate, share of limit", "% of limit", share, 100, "limit"),
         Panel("Paper latency", "minutes", latency),
-        Panel("Concurrency at the end of the run", "requests in flight", window),
+        Panel(f"Time to finish all {result.papers:,} papers", "minutes", [run_time]),
     ]
     limited = sum(p.rate_limited for p in result.points)
     errors = "no 429s" if limited == 0 else f"{limited:,} 429s"
