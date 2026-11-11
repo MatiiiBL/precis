@@ -33,7 +33,7 @@ from precis.corpus.synthesis import (
 from precis.corpus.topics import TOPICS_ARTIFACT, TopicModel, build_topics
 from precis.llm import AsyncAnthropicLike, Clock, Gateway, make_client
 from precis.models import CorpusReport
-from precis.offline import offline_client, offline_conflict
+from precis.offline import offline_client, offline_conflict, spend_phrase
 from precis.store import Store
 from precis.util import sha256_hex
 
@@ -181,7 +181,9 @@ def topics_command(
         best = model.silhouette[model.k]
         console.print(f"k = {model.k} by silhouette ({best:.3f}; tried {min(model.silhouette)}"
                       f"-{max(model.silhouette)}).")  # fmt: skip
-    console.print(f"Spent ${gateway.spent_usd:.2f} in {gateway.stats().calls} requests.")
+    console.print(
+        f"{gateway.stats().calls} requests, {spend_phrase(gateway.spent_usd, offline=offline)}."
+    )
 
 
 def report_command(
@@ -235,7 +237,7 @@ def report_command(
     console.print(f"Wrote [bold]{out}[/]: {report.title}")
     console.print(
         f"{len(report.topics)} topic syntheses, {stats.citations} citations kept, "
-        f"{stats.invalid_citations} removed; spent ${gateway.spent_usd:.2f}."
+        f"{stats.invalid_citations} removed; {spend_phrase(gateway.spent_usd, offline=offline)}."
     )
     for failed in stats.failed:
         console.print(

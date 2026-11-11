@@ -18,7 +18,7 @@ from precis.config import Config
 from precis.corpus.load import load_papers
 from precis.llm import Gateway, ScaledClock, UnpricedModelError, make_client
 from precis.models import Stage, StageStatus
-from precis.offline import offline_client, offline_conflict
+from precis.offline import offline_client, offline_conflict, spend_phrase
 from precis.pipeline import PIPELINE_STAGES, LiveProgress, Pipeline, batch_settings
 from precis.store import Store
 
@@ -145,7 +145,7 @@ def run_command(
         stats = asyncio.run(_run(pipeline, paper_ids, wanted))
     finally:
         store.close()
-    _print_run_summary(gateway.run_id, stats)
+    _print_run_summary(gateway.run_id, stats, offline=offline)
     if stats["interrupted"]:
         raise typer.Exit(INTERRUPTED_EXIT_CODE)
 
@@ -158,13 +158,13 @@ async def _run(pipeline: Pipeline, paper_ids: list[str], stages: list[Stage]) ->
         await pipeline.gateway.aclose()
 
 
-def _print_run_summary(run_id: str, stats: dict[str, Any]) -> None:
+def _print_run_summary(run_id: str, stats: dict[str, Any], *, offline: bool) -> None:
     gateway = stats["gateway"]
     console.print(
         f"\n[bold]{run_id}[/bold]: {stats['papers_finished']} of {stats['papers']} papers "
         f"finished, {stats['papers_blocked']} blocked, in {stats['elapsed_s']:.1f}s; "
         f"{gateway['calls']:,} requests ({gateway['cached_calls']:,} from cache), "
-        f"${gateway['cost_usd']:.4f}."
+        f"{spend_phrase(gateway['cost_usd'], offline=offline, digits=4)}."
     )
     if stats["blocked"]:
         reasons = "; ".join(f"{n:,} {reason}" for reason, n in stats["blocked"].items())

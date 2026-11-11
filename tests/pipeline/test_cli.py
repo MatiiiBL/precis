@@ -33,6 +33,7 @@ def test_offline_run_then_status_and_export(store_path: Path, tmp_path: Path) ->
     result = precis(store_path, "run", "--offline")
     assert result.exit_code == 0, result.output
     assert "4 of 4 papers finished, 0 blocked" in result.output
+    assert "at API prices (offline: nothing spent)" in result.output
     assert "Final summaries of 4 papers: 100.0% of " in result.output
     assert "Revised 1 summaries: " in result.output
 

@@ -27,6 +27,7 @@ def test_topics_report_and_site_offline(store_path: Path, tmp_path: Path) -> Non
     result = runner.invoke(app, [*base, "topics", "--offline", "--k", "4"])
     assert result.exit_code == 0, result.output
     assert "4 topics" in result.output
+    assert "(offline: nothing spent)" in result.output
 
     report_path = tmp_path / "out" / "report.md"
     result = runner.invoke(app, [*base, "report", "--offline", "--out", str(report_path)])

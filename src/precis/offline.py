@@ -69,3 +69,9 @@ def offline_conflict(store: Store) -> str | None:
         "results would replace them. Copy the store and run offline on the copy "
         "(precis --store <copy> ...)."
     )
+
+
+def spend_phrase(usd: float, *, offline: bool, digits: int = 2) -> str:
+    """How a command reports its cost: offline, nothing was spent."""
+    amount = f"${usd:.{digits}f}"
+    return f"{amount} at API prices (offline: nothing spent)" if offline else f"spent {amount}"

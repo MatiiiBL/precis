@@ -41,7 +41,7 @@ from precis.eval.simclock import VirtualClock
 from precis.llm import AsyncAnthropicLike, Clock, Gateway, RealClock, make_client
 from precis.llm.fake import FakeAnthropic
 from precis.models import Document
-from precis.offline import RESPONDERS
+from precis.offline import RESPONDERS, spend_phrase
 from precis.store import Store
 
 console = Console()
@@ -95,7 +95,9 @@ def _evaluate[R: BaseModel](
             clock,
             with_gateway(store, config, command, work, client=client, clock=clock, offline=offline),
         )
-    console.print(f"Spent ${gateway.spent_usd:.2f} in {gateway.stats().calls} requests.")
+    console.print(
+        f"{gateway.stats().calls} requests, {spend_phrase(gateway.spent_usd, offline=offline)}."
+    )
     return config, result
 
 
