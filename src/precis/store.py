@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -307,13 +307,26 @@ class Store:
         )
         return [r[0] for r in rows]
 
-    def reset_running(self) -> int:
-        """Mark stages left ``running`` by a crashed process as ``pending``; returns how many."""
-        cursor = self._db.execute(
-            "UPDATE stages SET status = ?, json = json_set(json, '$.status', ?) WHERE status = ?",
-            (StageStatus.PENDING.value, StageStatus.PENDING.value, StageStatus.RUNNING.value),
-        )
-        return cursor.rowcount
+    def reset_running(self, stages: Iterable[Stage] | None = None) -> int:
+        """Mark stages left ``running`` by a crashed process as ``pending``; returns how many.
+
+        ``stages`` limits the reset to the stages the calling command owns
+        (``None`` means every stage), so ``precis run`` does not reset the
+        ``fetch`` rows of a ``precis fetch`` that is running right now.
+        """
+        sql = "UPDATE stages SET status = ?, json = json_set(json, '$.status', ?) WHERE status = ?"
+        args: list[Any] = [
+            StageStatus.PENDING.value,
+            StageStatus.PENDING.value,
+            StageStatus.RUNNING.value,
+        ]
+        if stages is not None:
+            names = [Stage(s).value for s in stages]
+            if not names:
+                return 0
+            sql += f" AND stage IN ({', '.join('?' * len(names))})"
+            args.extend(names)
+        return self._db.execute(sql, args).rowcount
 
     # ------------------------------------------------------------------
     # LLM calls and the response cache
@@ -399,6 +412,10 @@ class Store:
             "VALUES (?, ?, ?)",
             (request_hash, _now(), _dump(response)),
         )
+
+    def cache_delete(self, request_hash: str) -> None:
+        """Drop a cached response (one that can no longer be read back, say)."""
+        self._db.execute("DELETE FROM response_cache WHERE request_hash = ?", (request_hash,))
 
     # ------------------------------------------------------------------
     # runs and corpus artifacts

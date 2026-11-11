@@ -205,3 +205,15 @@ def test_newer_schema_is_refused(tmp_path: Path) -> None:
     db.close()
     with pytest.raises(SchemaError):
         Store(path)
+
+
+def test_reset_running_can_be_limited_to_some_stages(store: Store) -> None:
+    store.set_stage(_stage("p1", Stage.FETCH, StageStatus.RUNNING))
+    store.set_stage(_stage("p1", Stage.READ, StageStatus.RUNNING))
+    store.set_stage(_stage("p2", Stage.VERIFY, StageStatus.RUNNING))
+
+    assert store.reset_running([Stage.READ, Stage.VERIFY, Stage.REVISE]) == 2
+    assert store.papers_with_status(Stage.FETCH, StageStatus.RUNNING) == ["p1"]
+    assert store.reset_running([]) == 0
+    assert store.reset_running() == 1
+    assert store.papers_with_status(Stage.FETCH, StageStatus.PENDING) == ["p1"]
