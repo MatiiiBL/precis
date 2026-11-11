@@ -229,7 +229,9 @@ def _runs_table(runs: list[dict[str, Any]]) -> Table:
         table.add_column(name, justify="left" if name in ("run", "started", "note") else "right")
     for run in runs:
         stats = run["stats"] or {}
-        gateway = stats.get("gateway", {})
+        # precis run nests the gateway's counters; corpus and eval commands
+        # store them as the run's stats; fetch runs make no model requests.
+        gateway = stats.get("gateway", stats if "calls" in stats else None)
         note = (
             "running or crashed"
             if run["finished_at"] is None
@@ -246,8 +248,8 @@ def _runs_table(runs: list[dict[str, Any]]) -> Table:
             f"{run['started_at']:%Y-%m-%d %H:%M}",
             str(stats.get("papers", "")),
             str(stats.get("papers_finished", "")),
-            f"{gateway.get('calls', 0):,}",
-            f"${gateway.get('cost_usd', 0.0):.4f}",
+            f"{gateway['calls']:,}" if gateway else "",
+            f"${gateway['cost_usd']:.4f}" if gateway else "",
             note,
         )
     return table

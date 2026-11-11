@@ -163,3 +163,31 @@ def test_offline_run_refuses_a_store_with_paid_results(store_path: Path) -> None
     assert "paid for with the API (1 requests)" in result.output
     with Store(store_path) as store:
         assert store.stage_counts()[Stage.READ][StageStatus.DONE] == 0
+
+
+def test_runs_table_shows_the_model_requests_of_every_kind_of_run() -> None:
+    from rich.console import Console
+
+    from precis.cli.run import _runs_table
+
+    started = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+    runs = [
+        {"run_id": "fetch-1", "started_at": started, "finished_at": started,
+         "config": {"command": "fetch arxiv"}, "stats": {"found": 9, "requests": 12}},
+        {"run_id": "topics-1", "started_at": started, "finished_at": started,
+         "config": {"command": "topics", "offline": True},
+         "stats": {"calls": 23, "cost_usd": 0.13}},
+        {"run_id": "run-1", "started_at": started, "finished_at": started,
+         "config": {"offline": False}, "stats": {"papers": 4, "papers_finished": 4,
+                                                 "gateway": {"calls": 17, "cost_usd": 1.5}}},
+    ]  # fmt: skip
+    console = Console(record=True, width=200)
+    console.print(_runs_table(runs))
+    rows = {line.split()[1]: line for line in console.export_text().splitlines() if "-1 " in line}
+    assert "$" not in rows["fetch-1"]
+    assert "23" in rows["topics-1"]
+    assert "$0.1300" in rows["topics-1"]
+    assert "offline" in rows["topics-1"]
+    assert "17" in rows["run-1"]
+    assert "$1.5000" in rows["run-1"]
+    assert "offline" not in rows["run-1"]
