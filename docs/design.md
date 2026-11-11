@@ -97,7 +97,9 @@ class Store:
     def get_stage(self, paper_id: str, stage: Stage) -> StageRecord | None: ...
     def stage_counts(self) -> dict[Stage, dict[StageStatus, int]]: ...
     def papers_with_status(self, stage: Stage, status: StageStatus) -> list[str]: ...
-    def reset_running(self) -> int: ...        # RUNNING -> PENDING after a crash
+    def reset_running(self, stages: Iterable[Stage] | None = None) -> int: ...
+        # RUNNING -> PENDING after a crash, only for the stages the caller owns
+        # (None = all); precis run passes read/verify/revise, precis fetch FETCH
 
     # LLM calls and the response cache
     def record_call(self, call: LLMCall) -> None: ...
@@ -106,6 +108,7 @@ class Store:
     def usage(self, *, run_id: str | None = None) -> list[UsageRow]: ...
     def cache_get(self, request_hash: str) -> dict[str, Any] | None: ...
     def cache_put(self, request_hash: str, response: dict[str, Any]) -> None: ...
+    def cache_delete(self, request_hash: str) -> None: ...
 
     # runs and corpus artifacts (topics, syntheses, reports, eval results)
     def start_run(self, run_id: str, config: dict[str, Any]) -> None: ...
@@ -135,6 +138,8 @@ class Gateway:
     def stats(self) -> GatewayStats: ...    # in flight, concurrency limit, calls,
                                             # retries, 429s, tokens, cost, ...
     async def aclose(self) -> None: ...     # flush and wait for pending batches
+    @contextmanager
+    def cache_scope(self, salt: str) -> Iterator[None]: ...  # see Cache below
 
 def make_client(config: Config) -> AsyncAnthropicLike: ...   # real SDK client, max_retries=0
 ```
@@ -147,6 +152,14 @@ The gateway adds the cross-cutting parts:
    `pipeline.use_cache`, a stored response for the same hash is returned
    without a request and recorded as a `cached` call costing 0. Prompts must
    therefore be deterministic: no timestamps, ids or unordered collections.
+   Refusals and replies with `stop_reason == "max_tokens"` are never cached,
+   and a stored row that no longer reads back is deleted and treated as a
+   miss. Inside `with gateway.cache_scope(salt)`, a non-empty `salt` is mixed
+   into the hash of every request (tasks started inside inherit it): the
+   scheduler wraps the re-execution of a `failed` stage in
+   `cache_scope(f"attempt-{n}")`, so the retry gets fresh responses while a
+   crash during that attempt still resumes from its own cache. The empty
+   salt is the plain hash above.
 2. **Admission.** A request waits for (a) a concurrency slot under an AIMD
    limit (start at `limits.initial_concurrency`, +1 per window of successes up
    to `limits.max_concurrency`, halve on 429/529), and (b) token-bucket

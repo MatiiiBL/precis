@@ -13,11 +13,15 @@ from __future__ import annotations
 import logging
 import random
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 import anthropic
+import pydantic
 from anthropic.types import Message
 from anthropic.types.beta import BetaMessage
 
@@ -39,6 +43,10 @@ log = logging.getLogger(__name__)
 # Starting guesses until a stage has real responses to average over.
 _DEFAULT_OUTPUT_TOKENS = 1000
 _EWMA_WEIGHT = 0.2
+
+# The salt of the innermost ``Gateway.cache_scope``; a context variable so
+# that it follows each asyncio task (and the tasks it starts) separately.
+_CACHE_SALT: ContextVar[str] = ContextVar("precis_cache_salt", default="")
 
 
 @dataclass(frozen=True)
@@ -209,6 +217,23 @@ class Gateway:
         if self._batches is not None:
             await self._batches.aclose()
 
+    @contextmanager
+    def cache_scope(self, salt: str) -> Iterator[None]:
+        """Give the requests made inside the block their own cache entries.
+
+        A non-empty ``salt`` is mixed into the request hash of every request
+        made in this context, including tasks started inside the block, so a
+        re-execution of a failed stage (``cache_scope(f"attempt-{n}")``) gets
+        fresh responses instead of replaying the ones that failed, while a
+        crash during that attempt still resumes from its own cache. The
+        empty salt is the unscoped hash, so existing cache rows stay valid.
+        """
+        token = _CACHE_SALT.set(salt)
+        try:
+            yield
+        finally:
+            _CACHE_SALT.reset(token)
+
     async def create(
         self, params: dict[str, Any], *, stage: str, paper_id: str | None = None
     ) -> Reply:
@@ -220,12 +245,14 @@ class Gateway:
         """
         model = str(params.get("model", ""))
         check_priced([model])
-        request_hash = sha256_hex(canonical_json(params))
+        request_hash = request_hash_of(params, _CACHE_SALT.get())
         started_at = datetime.now(UTC)
         if self._config.pipeline.use_cache:
             cached = self._store.cache_get(request_hash)
             if cached is not None:
-                return self._serve_cached(cached, request_hash, stage, paper_id, started_at)
+                reply = self._serve_cached(cached, request_hash, stage, paper_id, started_at)
+                if reply is not None:
+                    return reply
 
         estimate = self._estimate(params, stage)
         self._check_budget(estimate)
@@ -259,12 +286,23 @@ class Gateway:
         stage: str,
         paper_id: str | None,
         started_at: datetime,
-    ) -> Reply:
+    ) -> Reply | None:
+        """The stored reply, recorded as a cached call; ``None`` if it cannot be read.
+
+        A row that no longer validates (written by an older version, or by
+        a bug) is deleted and treated as a miss, so it costs one request
+        instead of failing every later run of its paper.
+        """
         reply: Reply
-        if cached.get("kind") == "beta":
-            reply = BetaMessage.model_validate(cached["message"])
-        else:
-            reply = Message.model_validate(cached["message"])
+        try:
+            if cached.get("kind") == "beta":
+                reply = BetaMessage.model_validate(cached["message"])
+            else:
+                reply = Message.model_validate(cached["message"])
+        except (pydantic.ValidationError, KeyError) as e:
+            log.warning("dropping unreadable cached response %s: %s", request_hash[:12], e)
+            self._store.cache_delete(request_hash)
+            return None
         self._counters.cached_calls += 1
         self._store.record_call(
             LLMCall(
@@ -475,11 +513,10 @@ class Gateway:
         if refused:
             c.refusals += 1
             raise RefusalError(reply)
-        if self._config.pipeline.use_cache:
-            kind = "beta" if isinstance(reply, BetaMessage) else "message"
-            self._store.cache_put(
-                request_hash, {"kind": kind, "message": reply.model_dump(mode="json")}
-            )
+        # A reply cut off at max_tokens is one the caller will retry with a
+        # larger budget or give up on; caching it would replay the failure.
+        if self._config.pipeline.use_cache and reply.stop_reason != "max_tokens":
+            self._store.cache_put(request_hash, cache_payload(reply))
         return reply
 
     def _record_failure(
@@ -512,6 +549,22 @@ class Gateway:
             for model in list(models):
                 models.update(FALLBACK_TARGETS.get(model, ()))
         return models
+
+
+def request_hash_of(params: dict[str, Any], salt: str = "") -> str:
+    """The cache key of a request: its canonical JSON, plus the cache-scope salt if any."""
+    body = canonical_json(params)
+    return sha256_hex(f"{body}\ncache-scope:{salt}" if salt else body)
+
+
+def cache_payload(reply: Reply) -> dict[str, Any]:
+    """How a reply is stored in the response cache.
+
+    ``to_dict`` writes the API's field names (``from`` rather than the
+    SDK's ``from_``), the form ``model_validate`` reads back.
+    """
+    kind = "beta" if isinstance(reply, BetaMessage) else "message"
+    return {"kind": kind, "message": reply.to_dict(mode="json")}
 
 
 def _ewma(previous: float | None, value: float) -> float:

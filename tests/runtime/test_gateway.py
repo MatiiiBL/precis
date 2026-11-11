@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 import anthropic
@@ -288,3 +289,95 @@ def test_make_client_turns_off_sdk_retries(monkeypatch: pytest.MonkeyPatch) -> N
     assert isinstance(client, anthropic.AsyncAnthropic)
     assert client.max_retries == 0
     assert client.timeout == 90
+
+
+# ----------------------------------------------------------------------
+# cache durability (review R1, R2)
+# ----------------------------------------------------------------------
+
+
+def _refuse_primary(params: dict[str, Any]) -> FakeReply:
+    if params["model"] == "claude-opus-5-5":
+        return FakeReply.refusal("cyber")
+    return FakeReply.text("served by the fallback")
+
+
+async def test_fallback_reply_round_trips_through_the_cache(
+    store: Store, clock: ManualClock
+) -> None:
+    sections = {"pipeline": {"fallbacks": True}}
+    first = gateway(FakeAnthropic([_refuse_primary], clock=clock), store, clock, **sections)
+    served = await first.create(request(), stage="read")
+
+    second_fake = FakeAnthropic([_refuse_primary], clock=clock)
+    second = gateway(second_fake, store, clock, **sections)
+    replayed = await second.create(request(), stage="read")
+
+    assert replayed == served
+    assert replayed.content[0].type == "fallback"
+    assert second_fake.requests == []
+    assert [c.status for c in store.calls()] == ["ok", "cached"]
+
+
+async def test_unreadable_cache_row_is_a_miss(
+    fake: FakeAnthropic, store: Store, clock: ManualClock
+) -> None:
+    params = request("poisoned")
+    gw = gateway(fake, store, clock)
+    await gw.create(params, stage="read")
+    [call] = store.calls()
+    store.cache_put(call.request_hash, {"kind": "beta", "message": {"content": "garbage"}})
+
+    reply = await gw.create(params, stage="read")
+
+    assert reply.content[0].type == "text"
+    assert len(fake.requests) == 2
+    readable = store.cache_get(call.request_hash)
+    assert readable is not None
+    assert readable["message"]["id"] == reply.id
+
+
+async def test_truncated_replies_are_not_cached(store: Store, clock: ManualClock) -> None:
+    fake = FakeAnthropic([lambda p: FakeReply.text("word " * 400)], clock=clock)
+    gw = gateway(fake, store, clock)
+    first = await gw.create(request(max_tokens=50), stage="synthesize")
+    assert first.stop_reason == "max_tokens"
+    await gw.create(request(max_tokens=50), stage="synthesize")
+    assert len(fake.requests) == 2
+    assert [c.status for c in store.calls()] == ["ok", "ok"]
+
+
+async def test_cache_scope_salts_the_request_hash(
+    fake: FakeAnthropic, store: Store, clock: ManualClock
+) -> None:
+    gw = gateway(fake, store, clock)
+    await gw.create(request("same"), stage="read")
+    with gw.cache_scope(""):
+        await gw.create(request("same"), stage="read")  # empty salt: today's hash
+    assert len(fake.requests) == 1
+
+    with gw.cache_scope("attempt-2"):
+        await gw.create(request("same"), stage="read")  # a fresh response
+        await gw.create(request("same"), stage="read")  # replays within the scope
+    assert len(fake.requests) == 2
+    with gw.cache_scope("attempt-3"):
+        await gw.create(request("same"), stage="read")
+    assert len(fake.requests) == 3
+
+    statuses = [(c.status, c.request_hash) for c in store.calls()]
+    hashes = {h for _, h in statuses}
+    assert len(hashes) == 3
+    assert [s for s, _ in statuses] == ["ok", "cached", "ok", "cached", "ok"]
+
+
+async def test_cache_scope_reaches_tasks_started_inside_it(
+    fake: FakeAnthropic, store: Store, clock: ManualClock
+) -> None:
+    gw = gateway(fake, store, clock)
+    await gw.create(request("a"), stage="read")
+    with gw.cache_scope("attempt-2"):
+        await asyncio.gather(gw.create(request("a"), stage="read"))
+    assert len(fake.requests) == 2
+    # The scope ends with the block.
+    await gw.create(request("a"), stage="read")
+    assert len(fake.requests) == 2
