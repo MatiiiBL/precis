@@ -3,6 +3,7 @@ import pytest
 from precis.agents import messages
 from precis.config import AgentConfig, AgentsConfig
 from precis.models import ClaimCheck, PaperSummary, Verdict, Verification
+from precis.pipeline import hashing
 from precis.pipeline.hashing import read_hash, revise_hash, verify_hash
 
 from .helpers import paper
@@ -25,6 +26,18 @@ def test_every_stage_hash_covers_the_request_format(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(messages, "REQUEST_FORMAT_VERSION", messages.REQUEST_FORMAT_VERSION + 1)
     after = hashes()
     assert all(b != a for b, a in zip(before, after, strict=True))
+
+
+@pytest.mark.parametrize("strategy", ["agentic", "fulltext", "mapreduce"])
+def test_every_read_hash_covers_the_summary_schema(
+    monkeypatch: pytest.MonkeyPatch, strategy: str
+) -> None:
+    # The fulltext and mapreduce strategies send the schema as their output format.
+    meta, doc = paper(0)
+    config = AgentsConfig(strategy=strategy)
+    before = read_hash(config, meta, doc)
+    monkeypatch.setattr(hashing, "_TOOLS_VERSION", "edited")
+    assert read_hash(config, meta, doc) != before
 
 
 def summary(tldr: str = "Design0 is fast.") -> PaperSummary:

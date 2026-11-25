@@ -78,7 +78,8 @@ def document_digest(meta: PaperMeta, doc: Document, *, include_abstract: bool) -
 
 
 def read_hash(config: AgentsConfig, meta: PaperMeta, doc: Document) -> str:
-    options: dict[str, Any] = {"include_abstract": config.include_abstract}
+    # Every strategy sends the summary schema: as a tool, or as its output format.
+    options: dict[str, Any] = {"include_abstract": config.include_abstract, "tools": _TOOLS_VERSION}
     if config.strategy == "agentic":
         options |= _reading_options(config)
     elif config.strategy == "mapreduce":
