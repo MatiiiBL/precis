@@ -112,3 +112,13 @@ async def test_a_batch_collected_again_after_a_kill_is_filed_once(tmp_path: Path
         await second.aclose()
         assert resumed.open_batches() == []
         assert max(_paid(resumed.calls()).values()) == 1
+        # The result filed again keeps its row, and the run that paid for it...
+        by_run = Counter(c.run_id for c in resumed.calls())
+        assert by_run == {"run-1": 1, "run-2": 1}
+        # ...and is not counted again: the budget sees what the store holds.
+        stored = sum(row.cost_usd for row in resumed.usage(offline=False))
+        assert second.total_spent_usd == pytest.approx(stored)
+        assert second.stats().calls == 1
+        assert second.spent_usd == pytest.approx(
+            sum(row.cost_usd for row in resumed.usage(run_id="run-2"))
+        )

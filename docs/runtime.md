@@ -354,8 +354,9 @@ caller. Now:
 - every succeeded result is filed (an `LLMCall` row and a cache entry, in
   one transaction) whether or not its caller is still waiting; the row's id
   is the batch id and custom id, so a batch collected again after a kill
-  between filing its results and closing it replaces those rows instead of
-  recording the results twice;
+  between filing its results and closing it keeps the rows it has (and the
+  run that paid for them) instead of recording the results twice, and the
+  gateway does not count them again toward the budget;
 - polling and result-stream errors retry the same batch with backoff up to
   `batch_poll_max_s`, indefinitely; the stream is reopened and entries
   already filed are skipped (a connection that drops mid-stream raises the

@@ -372,7 +372,7 @@ class Store:
     def record_call(self, call: LLMCall) -> None:
         self._insert_call(call)
 
-    def record_reply(self, call: LLMCall, response: dict[str, Any] | None) -> None:
+    def record_reply(self, call: LLMCall, response: dict[str, Any] | None) -> bool:
         """Record a paid call and cache its response under ``call.request_hash``, atomically.
 
         Both rows are written in one transaction. Written one after the
@@ -380,18 +380,25 @@ class Store:
         and the resumed run sent and paid for the request again. ``None``
         records the call alone (a refusal, or a reply cut off at
         ``max_tokens``, which must not be replayed).
+
+        Returns whether the call is new. A call whose id is already recorded
+        (a batch result filed again when its batch is collected again after
+        a kill) keeps the row it has, with the run that paid for it.
         """
         with self._transaction():
-            self._insert_call(call)
+            new = self._insert_call(call)
             if response is not None:
                 self._insert_cache(call.request_hash, response)
+        return new
 
-    def _insert_call(self, call: LLMCall) -> None:
-        self._db.execute(
-            "INSERT OR REPLACE INTO llm_calls (call_id, run_id, paper_id, stage, model, status, "
+    def _insert_call(self, call: LLMCall) -> bool:
+        """Insert ``call`` unless its id is already recorded; return whether it was."""
+        cursor = self._db.execute(
+            "INSERT INTO llm_calls (call_id, run_id, paper_id, stage, model, status, "
             "started_at, input_tokens, output_tokens, cache_creation_input_tokens, "
             "cache_read_input_tokens, cost_usd, offline, json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (call_id) DO NOTHING",
             (
                 call.call_id,
                 call.run_id,
@@ -409,6 +416,7 @@ class Store:
                 call.model_dump_json(),
             ),
         )
+        return cursor.rowcount == 1
 
     def calls(self, *, run_id: str | None = None, paper_id: str | None = None) -> list[LLMCall]:
         """Calls in the order they started, optionally filtered by run and paper."""
