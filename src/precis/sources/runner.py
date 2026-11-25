@@ -40,7 +40,9 @@ logger = logging.getLogger(__name__)
 # disk; nothing is downloaded again).
 #   2: tables of contents, lopsided outlines, wrapped headings, "References."
 #      headings and run-in acknowledgments (docs/ingest.md, "After the full run").
-PARSER_VERSION = 2
+#   3: a run-in acknowledgment must thank or name funding, so prose about ACK
+#      messages is no longer cut (docs/ingest.md, "Parser version 3").
+PARSER_VERSION = 3
 WORKERS = 4
 
 OutcomeStatus = Literal["html", "pdf", "skipped", "failed"]

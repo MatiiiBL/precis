@@ -166,6 +166,15 @@ def test_a_run_in_acknowledgment_paragraph_is_dropped() -> None:
     assert doc.sections[0].text == "FuseMap improves ADP by 9%."
 
 
+def test_protocol_prose_about_acknowledgment_messages_is_kept() -> None:
+    protocol = (
+        "The directory sends invalidations to every sharer. Acknowledgment (ACK) messages "
+        "return to the requester, which writes once all of them have arrived."
+    )
+    doc = _parse(section("S3", "3", "Coherence Protocol", para(protocol)))
+    assert doc.sections[0].text == protocol
+
+
 def test_front_matter_notes_are_not_mistaken_for_body_text() -> None:
     note = (
         '<span class="ltx_note ltx_role_footnotetext"><span class="ltx_note_outer">'
