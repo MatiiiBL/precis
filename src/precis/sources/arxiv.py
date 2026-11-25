@@ -8,9 +8,9 @@ the API shape the code:
   exceeds ``result_cap`` is split in half (recursively, down to the minute)
   and each half is paged separately.
 - The API sometimes answers a valid request with an empty page. An empty
-  page before the reported end of the results is retried as a fresh
-  request; a window that reports zero results is checked once more before
-  it is believed.
+  page before the end its window's first page reported is retried as a
+  fresh request, up to ``max_attempts``, and then fails the search; a window
+  that reports zero results is checked once more before it is believed.
 """
 
 from __future__ import annotations
@@ -133,10 +133,16 @@ class _Pager:
             offset += len(page.entries)
             if offset >= limit:
                 return
-            page = await self._page(params, offset)
+            # The first page said how many are left, so an empty page here is
+            # never believed, even when it reports zero results itself.
+            page = await self._page(params, offset, expect=limit - offset)
 
-    async def _page(self, params: dict[str, str | int], start: int) -> FeedPage:
-        return await _request(self.http, {**params, "start": start}, max_attempts=self.max_attempts)
+    async def _page(
+        self, params: dict[str, str | int], start: int, expect: int | None = None
+    ) -> FeedPage:
+        return await _request(
+            self.http, {**params, "start": start}, max_attempts=self.max_attempts, expect=expect
+        )
 
 
 async def _request(
@@ -148,8 +154,9 @@ async def _request(
 ) -> FeedPage:
     """One API request, retried while the page comes back empty when it should not.
 
-    ``expect`` is how many entries the request must return (for id lists);
-    for searches it is what the feed's own total says is left.
+    ``expect`` is how many entries the request must return (for id lists,
+    and for search pages after a window's first); otherwise it is what the
+    feed's own total says is left.
     """
     start = int(params.get("start", 0))
     remaining = 0

@@ -77,10 +77,12 @@ A search is `(cat:cs.AR OR cat:cs.PF) AND submittedDate:[202507010000 TO
   half, recursively down to one-minute windows, and each window is paged
   separately. The cs.AR range above is 3,013 results, one window.
 - **Empty pages.** The API sometimes answers a valid request with zero
-  entries. An empty page before the reported total is asked for again (up
-  to `fetch.max_attempts`), and a window that reports zero results is
-  checked once more before it is believed. The paging offset advances by
-  the entries actually received, since pages can come back short.
+  entries. An empty page before the total the window's first page reported
+  is asked for again (up to `fetch.max_attempts`, even when it reports zero
+  results itself) and then fails the search; a window that reports zero
+  results is checked once more before it is believed. The paging offset
+  advances by the entries actually received, since pages can come back
+  short.
 - **Shifting pages.** A paper can move between pages while a long query
   is being read; results are de-duplicated by id.
 
