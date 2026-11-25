@@ -214,10 +214,12 @@ accepted (`agents/submissions.py`):
   or a caption);
 - **every number** in the tldr, problem, approach, contributions, limitations
   and findings appears somewhere in the paper (title, abstract, body or
-  captions), after canonicalizing (`1,024` = `1024`, `1.50` = `1.5`); integers
-  up to 12 are exempt because papers spell them out. This is the cheapest
-  defence against invented and rounded numbers, the critic's most common
-  finding, and it costs one turn only when it fires.
+  captions), after canonicalizing (`1,024` = `1024`, `1.50` = `1.5`, and digit
+  groups split the way LaTeX math or siunitx writes them, `1{,}024`,
+  `10\,000` or a thin or no-break space, read as `1,024` and `10,000`);
+  integers up to 12 are exempt because papers spell them out. This is the
+  cheapest defence against invented and rounded numbers, the critic's most
+  common finding, and it costs one turn only when it fires.
 
 Harmless differences are fixed silently instead of costing a turn: list
 items are stripped and de-duplicated and keywords lowercased.
@@ -296,7 +298,10 @@ verification), so faithfulness before and after revision can be compared.
   attempt in the same scope, so the turns it finished replay for free. At
   start, `Store.reset_running` turns `read`, `verify` and `revise` stages left
   `running` by a crash back to `pending`; the `fetch` rows of a concurrent
-  `precis fetch` are not touched.
+  `precis fetch` are not touched. A stage re-run with new settings keeps its
+  previous output in its record until the new result is stored, so an
+  interrupt, a crash, the budget or a failure leaves the paper's earlier
+  summary and verification in place for `export`, `topics` and `site`.
 - **Budget.** `budget.max_cost_usd` (`--max-cost`) caps the store's total
   recorded spend, over every run (offline calls are not spend; see
   [runtime.md](runtime.md#store)). `BudgetExceeded` from the gateway leaves
@@ -450,7 +455,9 @@ with an error rather than replace them; run it on a copy.
 - The untrusted-text clause and the delimiters are what the pipeline can
   enforce; whether a model resists a given injection is not tested offline.
 - The number check exempts integers up to 12 and cannot see numbers the
-  paper spells out ("twenty"); derived figures ("2x" from 10 vs 5) are
+  paper spells out ("twenty"); a list written without spaces
+  (`{128,256,512}`) reads as one number grouped by thousands, so its
+  members do not count on their own; derived figures ("2x" from 10 vs 5) are
   rejected by design, which occasionally costs a turn for a legitimate
   restatement.
 - The quote check accepts any quote that occurs somewhere in the paper,

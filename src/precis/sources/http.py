@@ -41,7 +41,8 @@ class RateLimiter:
     """Starts requests at least ``min_interval_s`` apart, across every task sharing it.
 
     Waiters queue on a lock, so they are served in arrival order and each
-    one's wait is measured from the previous request's start.
+    one's wait is measured from the previous request's start. A ``hold``
+    that arrives while a waiter sleeps applies to that waiter too.
     """
 
     def __init__(self, min_interval_s: float, clock: Clock | None = None) -> None:
@@ -53,8 +54,9 @@ class RateLimiter:
     async def wait(self) -> None:
         """Return when the caller may start its request."""
         async with self._lock:
-            delay = self._next - self._clock.now()
-            if delay > 0:
+            # Checked again after every sleep: a hold() made meanwhile (another
+            # caller's Retry-After) moves _next later, and that later time wins.
+            while (delay := self._next - self._clock.now()) > 0:
                 await self._clock.sleep(delay)
             self._next = self._clock.now() + self._interval
 

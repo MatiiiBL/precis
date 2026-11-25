@@ -197,12 +197,12 @@ request arriving while more than 24 are in flight (64 closed-loop clients,
 
 | Concurrency control | Successful requests/min | Responses that were 529 | Mean in flight |
 |---|---|---|---|
-| AIMD with slow start (8 → 64 ceiling) | 242 | 0.8 % | 18.4 |
-| Fixed at 64 | 309 | 52.2 % | 24.1 |
+| AIMD with slow start (8 → 64 ceiling) | 244 | 0.7 % | 18.3 |
+| Fixed at 64 | 315 | 49.2 % | 24.1 |
 
 Slow start takes the window from 8 to the capacity in about ten seconds
 (the spike at the left of the figure) and stops at 25, one past the
-capacity, where the first 529 halves it. A fixed window gets 28 % more through because the fake's overload answer is
+capacity, where the first 529 halves it. A fixed window gets 29 % more through because the fake's overload answer is
 nearly free (0.1 s) and retries land in the gaps; it does so by sending about
 one failed request per successful one. Against the real API, where an
 overloaded service is slow and every client's retries add to the load, the
@@ -239,8 +239,14 @@ and a cached one are the same type.
 
 An error inside a stream that has already started arrives from the SDK as
 the base `APIStatusError` with status 200, so it is classified by its
-`type`. A timeout is retried only once: each timed-out attempt may have been
-generated and billed in full, and none of it would be recorded.
+`type`. A read timeout or a dropped connection after the response has
+started is a different case: the SDK converts transport errors into
+`APITimeoutError` and `APIConnectionError` only while it sends a request,
+so these come out of the stream as the raw `httpx2` exceptions, and the
+gateway converts them itself. (Before it did, they escaped `create` on the
+first attempt: no retry, no `error` call, and a failed stage for one
+network blip.) A timeout is retried only once: each timed-out attempt may
+have been generated and billed in full, and none of it would be recorded.
 
 Full jitter waits a uniformly random time in `[0, min(60 s, 1 s · 2^(n-1))]`
 before attempt `n + 1`, which spreads a burst of simultaneous failures
@@ -348,11 +354,16 @@ caller. Now:
 - every succeeded result is filed (an `LLMCall` row and a cache entry, in
   one transaction) whether or not its caller is still waiting; the row's id
   is the batch id and custom id, so a batch collected again after a kill
-  between filing its results and closing it replaces those rows instead of
-  recording the results twice;
+  between filing its results and closing it keeps the rows it has (and the
+  run that paid for them) instead of recording the results twice, and the
+  gateway does not count them again toward the budget;
 - polling and result-stream errors retry the same batch with backoff up to
   `batch_poll_max_s`, indefinitely; the stream is reopened and entries
-  already filed are skipped; items are requeued only once the batch has
+  already filed are skipped (a connection that drops mid-stream raises the
+  raw `httpx2` error, which counts as transient too); any other error while
+  a batch is collected (the store failing to file a result, say) fails its
+  waiting callers with `GatewayError` instead of leaving them waiting
+  forever, and leaves the batch open for the next run; items are requeued only once the batch has
   ended without them, or the API says it no longer exists;
 - a gateway that starts on a store with open batches collects their results
   in the background (in either mode), and a batch-mode request whose result
@@ -394,7 +405,9 @@ models what the runtime reacts to:
   continuously, answer 429 with `retry-after`, and send the rate-limit
   headers on every response; `set_limits` changes them mid-run.
 - **Faults.** Random or scripted (`fail_next`) 429, 529, 500, timeouts and
-  400s; an error event or a timeout after a stream has started; 529 above a
+  400s; an error event, a timeout or a dropped connection after a stream
+  has started (the last two as the raw `httpx2` errors the SDK lets
+  through); 529 above a
   concurrency threshold; errored and expired batch items; Batches API
   outages on create, retrieve or mid-way through a results stream
   (`fail_batch_api`); a 413 for batches over `max_batch_bytes`.
@@ -408,26 +421,29 @@ models what the runtime reacts to:
 
 All randomness comes from one `Random(seed)`. Time comes from a `Clock`:
 `ScaledClock(100)` runs fifteen simulated minutes in about nine seconds of
-wall time with every component keeping its real-world parameters, and
-`ManualClock` lets a unit test assert that a retry waited exactly
-`retry-after`.
+wall time with every component keeping its real-world parameters;
+`VirtualClock` (`precis.eval.simclock`), which the closed-loop simulations
+and the benchmarks use, jumps to the next wake-up whenever every task is
+waiting, so their results depend on the seed and not on how fast or busy
+the machine is; and `ManualClock` lets a unit test assert that a retry
+waited exactly `retry-after`.
 
 ## Measurements
 
-Closed-loop simulation (`uv run python -m tests.runtime.simulate`): 64
-clients send `claude-opus-5-5` requests back to back (~1,000 input and 300
+Closed-loop simulation (`uv run python -m tests.runtime.simulate`), on
+virtual time, so the figures are exactly reproducible: 64 clients send `claude-opus-5-5` requests back to back (~1,000 input and 300
 output tokens each, ~4.5 s latency with 30 % log-normal jitter) against a
 fake with 600 RPM, 1.2M ITPM and 240K OTPM. Nothing is configured; every
 limit is learned from headers. At 450 s the fake halves its request limit.
 
 | Measure | Slow start (default) | Additive only (`slow_start = false`) |
 |---|---|---|
-| Time for the window to grow from 8 to 45 (enough for 600 RPM) | 14 s | 175 s |
-| Requests/min, 60-450 s | 600 of 600 | 558 of 600 |
-| 429 responses | 0 of 6,836 | 0 |
+| Time for the window to grow from 8 to 45 (enough for 600 RPM) | 13 s | 173 s |
+| Requests/min, 60-450 s | 600 of 600 | 561 of 600 |
+| 429 responses | 0 of 6,839 | 0 |
 | Requests/min, 240-450 s (window settled) | 600 of 600 | |
 | Input / output tokens/min, 240-450 s | 601K / 180K | |
-| New 300 RPM limit adopted after the change | 1.3 s (the next response) | |
+| New 300 RPM limit adopted after the change | 1.0 s (the next response) | |
 | 30-s windows after the change | mean 300 RPM, max 316 RPM, 0 429s | |
 | Failed requests | 0 | 0 |
 
@@ -436,7 +452,7 @@ at the limit without a single 429 because it reads the limit from the
 first response and spends its burst conservatively: once the window is
 large enough, the request bucket, not the window, sets the rate. With slow
 start the window gets there in three round trips instead of three minutes,
-which is the whole difference between 558 and 600 requests per minute
+which is the whole difference between 561 and 600 requests per minute
 over the first 450 seconds.
 
 ## Limitations

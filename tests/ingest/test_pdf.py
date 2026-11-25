@@ -89,6 +89,21 @@ def test_front_matter_acknowledgements_references_and_furniture_are_removed() ->
     assert "\n\n2\n\n" not in f"\n\n{text}\n\n"
 
 
+def test_protocol_prose_about_acknowledgments_is_kept_and_a_run_in_one_cut() -> None:
+    lines = list(ACM_PAPER)
+    design = lines.index("3 DESIGN") + 1
+    lines[design:design] = [
+        "Acknowledgment (ACK) messages return to the requester once every sharer",
+        "has invalidated its copy, and PROTOMARK the requester writes after that.",
+    ]
+    evaluation = lines.index("ACKNOWLEDGMENTS")
+    lines[evaluation:evaluation] = ["Acknowledgment This work is sponsored by GRANTMARK."]
+    text = text_of(parse(lines))
+    assert "Acknowledgment (ACK) messages return" in text
+    assert "PROTOMARK" in text
+    assert "GRANTMARK" not in text
+
+
 def test_captions_are_moved_out_and_figure_labels_dropped() -> None:
     doc = parse(ACM_PAPER)
     assert [(c.id, c.text) for c in doc.captions] == [

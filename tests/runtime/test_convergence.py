@@ -1,7 +1,7 @@
 """End-to-end behaviour of the gateway against the fake's server-side limits.
 
-These run in simulated time (``ScaledClock``) for a few simulated minutes
-each, so their assertions leave room for scheduling jitter.
+These run on virtual time (``VirtualClock``) for a few simulated minutes
+each, so they give the same result on a busy CI runner as on a fast laptop.
 """
 
 from precis.llm.fake import Faults, ServerLimits
@@ -14,7 +14,6 @@ async def test_slow_start_reaches_the_rate_limit_quickly_without_429s() -> None:
     r = await simulate(
         duration_s=240,
         clients=48,
-        speed=60,
         limits=limits,
         gateway_limits={"initial_concurrency": 8, "max_concurrency": 48},
     )
@@ -38,7 +37,6 @@ async def test_slow_start_stops_at_the_first_overload_then_aimd_settles() -> Non
     r = await simulate(
         duration_s=300,
         clients=48,
-        speed=60,
         faults=Faults(overload_above=12),
         gateway_limits={"initial_concurrency": 4, "max_concurrency": 48},
     )

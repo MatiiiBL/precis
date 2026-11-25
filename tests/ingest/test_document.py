@@ -123,10 +123,15 @@ def test_surrogates_are_recombined_or_dropped() -> None:
         ("Our results hold. Acknowledgments: We thank the reviewers.", "Our results hold."),
         ("Acknowledgements. The authors thank X.", ""),
         ("ACKNOWLEDGMENT The authors thank X.", ""),
+        ("It holds. Acknowledgments\u2014We are grateful to X.", "It holds."),
         # Not acknowledgments: the word inside a sentence, or another word.
         ("Acknowledging the limits, we restrict the study.", None),
         ("As the acknowledgments note, Section 3 relies on it.", None),
         ("We list grants in the Acknowledgments. That is all.", None),
+        # Protocol prose about ACK messages, and a run-in heading about them.
+        ("Acknowledgment (ACK) messages are returned once every sharer invalidates.", None),
+        ("The owner forwards the data. Acknowledgements (ACKs) are counted at home.", None),
+        ("Acknowledgment Counting. Each MSHR counts the invalidations it awaits.", None),
     ],
 )
 def test_run_in_acknowledgments_are_cut(paragraph: str, kept: str | None) -> None:

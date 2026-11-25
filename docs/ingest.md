@@ -77,10 +77,12 @@ A search is `(cat:cs.AR OR cat:cs.PF) AND submittedDate:[202507010000 TO
   half, recursively down to one-minute windows, and each window is paged
   separately. The cs.AR range above is 3,013 results, one window.
 - **Empty pages.** The API sometimes answers a valid request with zero
-  entries. An empty page before the reported total is asked for again (up
-  to `fetch.max_attempts`), and a window that reports zero results is
-  checked once more before it is believed. The paging offset advances by
-  the entries actually received, since pages can come back short.
+  entries. An empty page before the total the window's first page reported
+  is asked for again (up to `fetch.max_attempts`, even when it reports zero
+  results itself) and then fails the search; a window that reports zero
+  results is checked once more before it is believed. The paging offset
+  advances by the entries actually received, since pages can come back
+  short.
 - **Shifting pages.** A paper can move between pages while a long query
   is being read; results are de-duplicated by id.
 
@@ -172,7 +174,10 @@ outside it (arXiv's page chrome, table of contents, license box).
   acknowledgment written as a bold lead-in instead of a section
   ("**Acknowledgment** This work is sponsored by ... Grant No. CCF2403134")
   is cut from the lead-in to the end of its paragraph, in both parsers;
-  left in, its grant numbers read like results of the paper.
+  left in, its grant numbers read like results of the paper. The sentence
+  after the lead-in must thank someone or name funding (thank, grateful,
+  support, fund, sponsor, grant, award, ...), so protocol prose such as
+  "Acknowledgment (ACK) messages are ..." stays.
 - A paper without any `\section` is cut into parts (see below).
 
 The page is decoded as UTF-8 regardless of its declarations; without that,
@@ -437,6 +442,18 @@ minutes and 25 requests to arXiv, and changed 92 of the 2,896 documents:
   2508.17562 together with the reference list that followed it in the same
   paragraph), and one reference list under "References:" dropped;
 - 6 HTML texts: a run-in acknowledgment removed, nothing else.
+
+## Parser version 3
+
+Version 2's run-in acknowledgment rule took any paragraph or sentence
+starting with "Acknowledgment" and a capital letter for one, so prose about
+ACK messages, common in coherence and network-on-chip papers, was cut to
+the end of its paragraph: "Acknowledgment (ACK) messages return to the
+requester ..." and a run-in "Acknowledgment Counting." heading with its
+text. Version 3 cuts only when the lead-in is followed by at most a period,
+colon or dash and the sentence after it thanks someone or names funding
+(see the HTML parser above). The next fetch command re-parses every fetched
+paper from its raw file, without downloading.
 
 ## Tests
 

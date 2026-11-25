@@ -175,6 +175,28 @@ async def test_a_page_that_stays_empty_is_an_error() -> None:
         await _search(api)
 
 
+async def test_a_later_page_that_reports_zero_results_is_an_error() -> None:
+    starts: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        starts.append(request.url.params["start"])
+        assert len(starts) <= 10, "the pager keeps asking for the same page"
+        if starts[-1] == "0":
+            entries = [atom_entry("2507.00001"), atom_entry("2507.00002")]
+            return httpx.Response(200, content=atom_feed(entries, total=3))
+        return httpx.Response(200, content=atom_feed([], total=0, start=2))
+
+    config = FetchConfig(min_interval_s=0, max_attempts=3)
+    transport = httpx.MockTransport(handle)
+    async with ArxivHttp(config, transport=transport, clock=ManualClock()) as http:
+        results = search(
+            http, ["cs.AR"], date(2025, 7, 1), date(2025, 7, 31), page_size=2, max_attempts=3
+        )
+        with pytest.raises(ArxivApiError, match="empty page at offset 2"):
+            _ = [m async for m in results]
+    assert starts == ["0", "2", "2", "2"]
+
+
 async def test_zero_results_are_confirmed_once() -> None:
     api = FakeApi([])
     assert await _search(api) == []

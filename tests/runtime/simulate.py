@@ -4,6 +4,10 @@ The convergence tests use ``simulate``; running this module measures the
 numbers quoted in docs/runtime.md and draws docs/img/runtime-aimd.png:
 
     uv run python -m tests.runtime.simulate
+
+Simulations run on a ``VirtualClock``, which advances only when every task
+is waiting, so a run depends on its seed and not on how fast or how busy the
+machine is.
 """
 
 from __future__ import annotations
@@ -15,7 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from precis.llm import Gateway, GatewayError, ScaledClock
+from precis.eval.simclock import VirtualClock
+from precis.llm import Gateway, GatewayError
 from precis.llm.fake import FakeAnthropic, FakeReply, Faults, LatencyModel, ServerLimits
 from precis.llm.limiter import AIMDWindow, Outcome
 from precis.store import Store
@@ -77,7 +82,6 @@ async def simulate(
     *,
     duration_s: float,
     clients: int,
-    speed: float,
     limits: ServerLimits | None = None,
     faults: Faults | None = None,
     change_at: float | None = None,
@@ -87,7 +91,7 @@ async def simulate(
     seed: int = 0,
 ) -> SimResult:
     """Run ``clients`` agents that send requests back to back for ``duration_s``."""
-    clock = ScaledClock(speed)
+    clock = VirtualClock()
     fake = FakeAnthropic(
         [_reply],
         clock=clock,
@@ -138,7 +142,10 @@ async def simulate(
             )
             await clock.sleep(1.0)
 
-    await asyncio.gather(sampler(), *(client() for _ in range(clients)))
+    async def everyone() -> None:
+        await asyncio.gather(sampler(), *(client() for _ in range(clients)))
+
+    await clock.run(everyone())
     return result
 
 
@@ -159,7 +166,6 @@ async def _measure() -> None:
     r = await simulate(
         duration_s=900,
         clients=64,
-        speed=100,
         limits=limits,
         change_at=450,
         new_limits=halved,
@@ -187,7 +193,6 @@ async def _measure() -> None:
     r = await simulate(
         duration_s=450,
         clients=64,
-        speed=100,
         limits=limits,
         gateway_limits={"max_concurrency": 64, "slow_start": False},
     )
@@ -201,7 +206,6 @@ async def _measure() -> None:
         r = await simulate(
             duration_s=600,
             clients=64,
-            speed=100,
             faults=Faults(overload_above=24),
             gateway_limits={"max_concurrency": 64, "initial_concurrency": 8},
             fixed_concurrency=fixed,

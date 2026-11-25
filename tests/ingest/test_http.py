@@ -63,6 +63,26 @@ async def test_hold_pushes_back_every_caller() -> None:
     assert clock.now() == 30.0
 
 
+async def test_retry_after_holds_back_callers_already_waiting() -> None:
+    clock = ManualClock()
+    starts: list[tuple[str, float]] = []
+    refused_at: list[float] = []
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        starts.append((request.url.path, clock.now()))
+        await asyncio.sleep(0)  # the reply takes a moment: the next caller starts waiting
+        if request.url.path == "/a" and not refused_at:
+            refused_at.append(clock.now())
+            return httpx.Response(429, headers={"Retry-After": "30"})
+        return httpx.Response(200)
+
+    async with _client(httpx.MockTransport(handle), clock) as http:
+        await asyncio.gather(*(http.get(f"https://arxiv.org/{p}") for p in "abc"))
+    later = [time for _, time in starts[1:]]
+    assert len(later) == 3
+    assert min(later) >= refused_at[0] + 30
+
+
 async def test_every_request_carries_the_user_agent() -> None:
     seen: list[httpx.Request] = []
     async with _client(_scripted([200], seen), ManualClock(), user_agent="precis-test/1") as http:

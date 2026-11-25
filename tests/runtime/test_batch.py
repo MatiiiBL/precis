@@ -179,12 +179,39 @@ async def test_a_polling_outage_keeps_waiting_for_the_same_batch(
 
 
 async def test_errors_while_streaming_results_are_retried(store: Store, clock: ManualClock) -> None:
+    # The connection drops after the first entry; the SDK raises the raw
+    # httpx2 error, which once left every caller of the batch waiting forever.
     fake = FakeAnthropic([echo], clock=clock, batch_latency_s=60)
     fake.fail_batch_api("results_stream")
     gw = batch_gateway(fake, store, clock, batch_max_requests=3)
-    replies = await asyncio.gather(*(gw.create(request(f"q{i}"), stage="read") for i in range(3)))
+    async with asyncio.timeout(10):
+        replies = await asyncio.gather(
+            *(gw.create(request(f"q{i}"), stage="read") for i in range(3))
+        )
     assert [r.content[0].type for r in replies] == ["text"] * 3
     assert fake.batch_sizes == [3]
+    assert store.open_batches() == []
+
+
+async def test_a_batch_that_cannot_be_filed_fails_its_callers_and_stays_open(
+    store: Store, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeAnthropic([echo], clock=clock, batch_latency_s=60)
+    gw = batch_gateway(fake, store, clock, batch_max_requests=2)
+
+    def disk_full(*args: object, **kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "record_reply", disk_full)
+    async with asyncio.timeout(10):
+        results = await asyncio.gather(
+            *(gw.create(request(f"q{i}"), stage="read") for i in range(2)),
+            return_exceptions=True,
+        )
+    assert all(isinstance(r, GatewayError) for r in results)
+    assert "disk full" in str(results[0])
+    # Nothing was filed, so the next run collects the batch instead of buying it again.
+    assert [len(items) for _, items in store.open_batches()] == [2]
 
 
 def _request_bytes(text: str) -> int:

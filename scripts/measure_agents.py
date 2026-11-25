@@ -132,16 +132,25 @@ def stage_figures(rows: dict[str, dict[str, float]]) -> dict[str, float]:
     }
 
 
+def _median(values: list[float]) -> float | None:
+    """The median, or ``None`` for no values (a small corpus may have no long paper)."""
+    return statistics.median(values) if values else None
+
+
+def _tokens(value: float | None) -> str:
+    return "-" if value is None else f"{value:,.0f}"
+
+
 def length_scaling(
     corpus: list[tuple[PaperMeta, Document]], read: dict[str, dict[str, float]]
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     """How read-stage tokens grow with body length, over every paper."""
     pairs = [(float(doc.n_tokens), read[meta.id]["tokens"]) for meta, doc in corpus]
     slope = statistics.linear_regression([x for x, _ in pairs], [y for _, y in pairs]).slope
     return {
         "slope": slope,
-        "median_short": statistics.median(y for x, y in pairs if x < SHORT),
-        "median_long": statistics.median(y for x, y in pairs if x > LONG),
+        "median_short": _median([y for x, y in pairs if x < SHORT]),
+        "median_long": _median([y for x, y in pairs if x > LONG]),
     }
 
 
@@ -223,8 +232,8 @@ def markdown(results: dict[str, Any]) -> str:
     for name, r in strategies.items():
         length = r["length"]
         lines.append(
-            f"| {name} | {length['slope']:.2f} | {length['median_short']:,.0f} | "
-            f"{length['median_long']:,.0f} |"
+            f"| {name} | {length['slope']:.2f} | {_tokens(length['median_short'])} | "
+            f"{_tokens(length['median_long'])} |"
         )
     agentic = strategies["agentic"]
     lines += [

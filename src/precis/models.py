@@ -214,7 +214,9 @@ class StageRecord(Record):
     error: str | None = None
     updated_at: datetime
     output: dict[str, Any] | None = Field(
-        default=None, description="JSON of the stage's output record (PaperSummary, ...)."
+        default=None,
+        description="JSON of the stage's output record (PaperSummary, ...); a re-run keeps "
+        "the previous one until it finishes.",
     )
 
 

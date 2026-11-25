@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 import anthropic
+import httpx2
 import pydantic
 from anthropic.types import Message
 from anthropic.types.beta import BetaMessage
@@ -584,19 +585,13 @@ class Gateway:
 
         ``call_id`` names the row; a batch result passes one derived from its
         batch and custom id, so filing the same result twice (the batch is
-        collected again after a kill) replaces the row instead of adding one.
+        collected again after a kill) keeps the row an earlier run filed. A
+        reply filed before is not counted again: its cost is already in
+        ``total_spent_usd``, which the budget caps.
         """
         reply = response.reply
         usage = reply.usage
         usd = reply_cost(reply, batch=response.batch)
-        c = self._counters
-        c.calls += 1
-        c.batch_calls += response.batch
-        c.input_tokens += usage.input_tokens
-        c.output_tokens += usage.output_tokens
-        c.cache_creation_input_tokens += usage.cache_creation_input_tokens or 0
-        c.cache_read_input_tokens += usage.cache_read_input_tokens or 0
-        c.cost_usd += usd
         refused = reply.stop_reason == "refusal"
         call = LLMCall(
             call_id=call_id or uuid.uuid4().hex,
@@ -625,9 +620,17 @@ class Gateway:
         cacheable = (
             self._config.pipeline.use_cache and not refused and reply.stop_reason != "max_tokens"
         )
-        self._store.record_reply(call, cache_payload(reply) if cacheable else None)
+        if self._store.record_reply(call, cache_payload(reply) if cacheable else None):
+            c = self._counters
+            c.calls += 1
+            c.batch_calls += response.batch
+            c.input_tokens += usage.input_tokens
+            c.output_tokens += usage.output_tokens
+            c.cache_creation_input_tokens += usage.cache_creation_input_tokens or 0
+            c.cache_read_input_tokens += usage.cache_read_input_tokens or 0
+            c.cost_usd += usd
+            c.refusals += refused
         if refused:
-            c.refusals += 1
             raise RefusalError(reply)
         return reply
 
@@ -665,13 +668,38 @@ class Gateway:
 
 
 async def _stream[T](manager: MessageStreamManagerLike[T]) -> tuple[T, dict[str, str]]:
+    """Send a streamed request; return its final message and the response headers.
+
+    The SDK turns transport errors into ``APITimeoutError`` and
+    ``APIConnectionError`` only while it sends a request. Once the response
+    has started, a read timeout or a dropped connection comes out of the
+    stream as the raw ``httpx2`` exception; it is translated here so the
+    retry policy sees the same error either way.
+    """
     async with manager as stream:
         headers = dict(stream.response.headers)
+        request_id = headers.get("request-id")
         try:
             return await stream.get_final_message(), headers
         except anthropic.APITimeoutError:
-            log.warning("request %s timed out mid-stream", headers.get("request-id"))
+            log.warning("request %s timed out mid-stream", request_id)
             raise
+        except httpx2.TimeoutException as e:
+            log.warning("request %s timed out mid-stream", request_id)
+            raise anthropic.APITimeoutError(request=_request_of(e)) from e
+        except httpx2.TransportError as e:
+            log.warning("request %s lost its connection mid-stream: %s", request_id, e)
+            raise anthropic.APIConnectionError(
+                message=f"connection lost mid-stream: {e}", request=_request_of(e)
+            ) from e
+
+
+def _request_of(error: httpx2.RequestError) -> httpx2.Request:
+    """The request an ``httpx2`` error belongs to, or a stand-in when it carries none."""
+    try:
+        return error.request
+    except RuntimeError:
+        return httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
 
 
 def _cache_write_ttl(params: dict[str, Any]) -> Literal["5m", "1h"] | None:

@@ -11,7 +11,9 @@ exists. A stage that fails is recorded with its error and stops that
 paper's later stages; a refusal is recorded as ``refused``. When the budget
 is reached, or on SIGINT, no new papers are admitted: on SIGINT the
 in-flight work is cancelled, and in both cases unfinished stages are left
-``pending`` for the next run.
+``pending`` for the next run. A stage that is re-run keeps its previous
+output in its record until a new result replaces it, so an unfinished or
+failed re-run leaves the paper's earlier results in place.
 """
 
 from __future__ import annotations
@@ -281,23 +283,33 @@ class Pipeline:
         # cache scope; a crash inside it still resumes from that scope.
         salt = f"attempt-{attempts}" if attempts > 1 else ""
         tally = self.stats.tally[stage]
-        self._record(paper.id, stage, StageStatus.RUNNING, config_hash, attempts)
+        # Until this attempt finishes, the record keeps the stage's previous
+        # result, which the later stages' records were built on.
+        kept = previous.output if previous is not None else None
+        self._record(paper.id, stage, StageStatus.RUNNING, config_hash, attempts, output=kept)
         tally.running += 1
         try:
             with self.gateway.cache_scope(salt):
                 output = await self._compute(paper, stage)
         except asyncio.CancelledError:
-            self._record(paper.id, stage, StageStatus.PENDING, config_hash, attempts, "interrupted")
+            error = "interrupted"
+            self._record(
+                paper.id, stage, StageStatus.PENDING, config_hash, attempts, error, output=kept
+            )
             tally.interrupted += 1
             raise
         except BudgetExceeded as e:
             self._stopping = True
             self.stats.budget_reached = True
-            self._record(paper.id, stage, StageStatus.PENDING, config_hash, attempts, str(e))
+            self._record(
+                paper.id, stage, StageStatus.PENDING, config_hash, attempts, str(e), output=kept
+            )
             tally.interrupted += 1
             raise _StopPaper from e
         except (AgentRefused, RefusalError) as e:
-            self._record(paper.id, stage, StageStatus.REFUSED, config_hash, attempts, str(e))
+            self._record(
+                paper.id, stage, StageStatus.REFUSED, config_hash, attempts, str(e), output=kept
+            )
             tally.refused += 1
             raise _StopPaper from e
         except Exception as e:
@@ -309,7 +321,9 @@ class Pipeline:
                 exc_info=log.isEnabledFor(logging.DEBUG),
             )
             error = f"{type(e).__name__}: {e}"
-            self._record(paper.id, stage, StageStatus.FAILED, config_hash, attempts, error)
+            self._record(
+                paper.id, stage, StageStatus.FAILED, config_hash, attempts, error, output=kept
+            )
             tally.failed += 1
             raise _StopPaper from e
         finally:
@@ -365,8 +379,10 @@ class Pipeline:
         attempts: int,
         error: str | None = None,
         *,
-        output: BaseModel | None = None,
+        output: BaseModel | dict[str, Any] | None = None,
     ) -> None:
+        if isinstance(output, BaseModel):
+            output = output.model_dump(mode="json")
         self.store.set_stage(
             StageRecord(
                 paper_id=paper_id,
@@ -377,7 +393,7 @@ class Pipeline:
                 run_id=self.run_id,
                 error=error,
                 updated_at=datetime.now(UTC),
-                output=output.model_dump(mode="json") if output is not None else None,
+                output=output,
             )
         )
 
@@ -385,7 +401,9 @@ class Pipeline:
         """A new result makes later stages' stored results stale: mark them pending."""
         for later in _DOWNSTREAM.get(stage, ()):
             record = self.store.get_stage(paper_id, later)
-            if record is not None and record.status is not StageStatus.PENDING:
+            if record is not None and (
+                record.status is not StageStatus.PENDING or record.output is not None
+            ):
                 self.store.set_stage(
                     record.model_copy(
                         update={

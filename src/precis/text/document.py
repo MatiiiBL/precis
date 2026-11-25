@@ -28,7 +28,14 @@ PART_TOKENS = 1500
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(\[])")
 # A run-in acknowledgment, at the start of a paragraph or after a sentence:
 # "Acknowledgment This work is sponsored by ...", "Acknowledgments. We thank ...".
-_ACKNOWLEDGMENT = re.compile(r"(?:^|(?<=[.!?]\s))(?i:acknowledge?ments?)\b\W*(?=[A-Z])")
+# The sentence after the lead-in must thank someone or name funding, so prose
+# about ACK messages ("Acknowledgment (ACK) messages are ...", a run-in
+# "Acknowledgment Counting.") is not taken for one.
+_ACKNOWLEDGMENT = re.compile(
+    r"(?:^|(?<=[.!?]\s))(?i:acknowledge?ments?)\b\s*[.:\u2013\u2014-]?\s*"
+    r"(?=[A-Z](?:[^.!?]|[.!?](?!\s+[A-Z]))*"
+    r"\b(?i:thank|grateful|gratitude|acknowledg|indebted|support|fund|sponsor|grant|award))"
+)
 
 
 class ParseError(Exception):

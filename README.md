@@ -44,11 +44,11 @@ flowchart LR
 | Papers downloaded | **2,918** arXiv cs.AR (computer architecture) papers from Jul 2025 to Oct 2026, at arXiv's polite pace of one request every 3 s |
 | Papers parsed | **2,896 (99.2%)**: 91.5% from arXiv's HTML, 7.7% from the PDF; median 8,670 tokens, 29.3 M tokens in all ([details](docs/ingest.md#the-full-corpus)) |
 | Whole pipeline on that corpus, offline | 2,889 papers read, verified and revised in 42 s (14,063 requests); topics in 5 s, report in 2 s, a 2,918-page site in 0.6 s |
-| Throughput under API rate limits (simulated) | **166 papers/min**: 2,000 papers in 12 simulated minutes, using 97% of the input-token limit with **zero** 429s ([benchmark](docs/evaluation.md#offline-benchmarks)) |
+| Throughput under API rate limits (simulated) | **164 papers/min**: 2,000 papers in 12.2 simulated minutes, using 97% of the input-token limit with **zero** 429s ([benchmark](docs/evaluation.md#offline-benchmarks)) |
 | Crash recovery | Run killed with SIGKILL partway through, with 9% of requests failing on purpose: **500/500 papers finished, none lost, 0 requests paid twice** |
 | Reading with tools vs. the whole text | The reader agent opens 53% of each paper. Its token use grows 0.45 tokens per token of paper vs 1.0 for full text, and it was the cheapest of the three strategies ([measurements](docs/agents.md#7-measurements-offline)) |
 | Batch mode | Same work for 52% less ($7.70 vs $16.14 for 200 papers at Claude Opus 5.5 prices) |
-| Code | 15k lines of Python and 8.5k lines of tests (486 tests); `mypy --strict`; CI on Python 3.12 and 3.13 |
+| Code | 15k lines of Python and 9k lines of tests (506 tests); `mypy --strict`; CI on Python 3.12 and 3.13 |
 
 The offline and simulated rows measure the system's machinery: scheduling,
 admission control, retries, caching and resumption. Deterministic stand-ins

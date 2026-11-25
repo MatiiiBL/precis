@@ -58,6 +58,24 @@ def test_clean_citations_keeps_valid_and_counts_removed() -> None:
     assert cited_ids(text) == ["1", "2", "1", "3", "2"]
 
 
+def test_clean_citations_ignores_versions_and_prefix_case() -> None:
+    text = "A [arXiv:1v2] b [arxiv:3]. C [ARXIV:1, arxiv:3v1]."
+    cleaned, kept, removed = clean_citations(text, {"1", "3"})
+    assert cleaned == "A [arXiv:1] b [arXiv:3]. C [arXiv:1] [arXiv:3]."
+    assert (kept, removed) == (4, 0)
+    assert cited_ids(text) == ["1", "3", "1", "3"]
+
+
+def test_removed_citations_keep_line_and_paragraph_breaks() -> None:
+    text = (
+        "Ends [arXiv:9].\n\n[arXiv:9] Next [arXiv:9] starts [arXiv:1] [arXiv:9] here\n"
+        "[arXiv:9]\nLast [arXiv:9]  \nline [arXiv:9]"
+    )
+    cleaned, kept, removed = clean_citations(text, {"1"})
+    assert cleaned == "Ends.\n\nNext starts [arXiv:1] here\nLast\nline"
+    assert (kept, removed) == (1, 7)
+
+
 def test_deal_fills_round_robin_chunks_within_budget() -> None:
     items = ["x" * 400] * 10  # 100 tokens each
     chunks = deal(items, 350)

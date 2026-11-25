@@ -61,6 +61,27 @@ def test_rerun_reports_the_same_cost_from_the_cache(workspace: list[str], tmp_pa
     assert latencies == [0, 0, 0]
 
 
+def test_ablation_recall_counts_the_same_papers_as_eval_abstract(tmp_path: Path) -> None:
+    store_path = tmp_path / "precis.db"
+    with Store(store_path) as store:
+        first, *_ = populate(store, 3, seed=0)
+        meta = store.get_paper(first)
+        assert meta is not None
+        # Too short for the offline judge to extract a key point from.
+        store.upsert_paper(meta.model_copy(update={"abstract": "Short abstract."}))
+    config = tmp_path / "precis.toml"
+    config.write_text(f'[eval]\nresults_dir = "{tmp_path / "results"}"\n')
+    for command in ("abstract", "ablation"):
+        args = ["--config", str(config), "--store", str(store_path), "eval", command]
+        result = runner.invoke(app, [*args, "--offline", "--n", "3"])
+        assert result.exit_code == 0, result.output
+    abstract = json.loads((tmp_path / "results" / "abstract.json").read_text())
+    ablation = json.loads((tmp_path / "results" / "ablation.json").read_text())
+    agentic = next(s for s in ablation["strategies"] if s["strategy"] == "agentic")
+    assert abstract["recall"]["n"] == 2  # the paper without key points has no recall
+    assert agentic["recall"] == abstract["recall"]
+
+
 def test_eval_needs_papers_with_text(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--store", str(tmp_path / "empty.db"), "eval", "abstract"])
     assert result.exit_code == 1

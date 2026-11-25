@@ -63,13 +63,14 @@ type FaultKind = Literal[
     "bad_request",
     "stream_error",  # an overloaded_error event after a streamed response started
     "stream_timeout",  # the stream stops sending data after it started
+    "stream_reset",  # the connection drops after the stream started
 ]
 
 # Fixed origin for the timestamps the fake reports (batch times, reset
 # headers), so they depend only on the clock and not on the wall date.
 EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
 
-_STREAM_FAULTS = ("stream_error", "stream_timeout")
+_STREAM_FAULTS = ("stream_error", "stream_timeout", "stream_reset")
 
 # The API routes ``fallbacks="default"`` by refusal category; the fake always
 # takes a model's first listed target, and never retries these categories.
@@ -176,7 +177,7 @@ class FakeEvent:
     """One request as the fake saw it, for measuring achieved rates."""
 
     t: float
-    outcome: Literal["ok", "429", "529", "500", "timeout", "400"]
+    outcome: Literal["ok", "429", "529", "500", "timeout", "reset", "400"]
     model: str
     input_tokens: int = 0
     output_tokens: int = 0
@@ -261,16 +262,21 @@ class FakeAnthropic:
     def fail_batch_api(self, operation: BatchOperation, times: int = 1) -> None:
         """Make the next ``times`` Batches API calls of this kind fail with a connection error.
 
-        ``results_stream`` fails a results stream after its first entry.
+        ``results_stream`` drops the connection of a results stream after its
+        first entry, which the SDK reports as the raw ``httpx2`` error.
         """
         self._batch_api_faults[operation] = self._batch_api_faults.get(operation, 0) + times
 
     def _batch_api_fault(self, operation: BatchOperation) -> None:
         if self._batch_api_faults.get(operation, 0) > 0:
             self._batch_api_faults[operation] -= 1
-            raise anthropic.APIConnectionError(
-                request=httpx2.Request("GET", "https://api.anthropic.com/v1/messages/batches")
-            )
+            request = httpx2.Request("GET", "https://api.anthropic.com/v1/messages/batches")
+            if operation == "results_stream":
+                raise httpx2.RemoteProtocolError(
+                    "peer closed connection without sending complete message body",
+                    request=request,
+                )
+            raise anthropic.APIConnectionError(request=request)
 
     def set_limits(self, limits: ServerLimits | None) -> None:
         """Change the simulated server limits; the buckets start full."""
@@ -321,9 +327,13 @@ class FakeAnthropic:
             await self.clock.sleep(self.latency.sample(self.rng, output_tokens))
             if self._buckets is not None:
                 self._buckets[2].take(output_tokens)
-            outcome: Literal["ok", "529", "timeout"] = "ok"
-            if fault is not None:
-                outcome = "timeout" if fault == "stream_timeout" else "529"
+            outcome: Literal["ok", "529", "timeout", "reset"] = "ok"
+            if fault == "stream_timeout":
+                outcome = "timeout"
+            elif fault == "stream_reset":
+                outcome = "reset"
+            elif fault is not None:
+                outcome = "529"
             self.events.append(
                 FakeEvent(
                     self.clock.now(),
@@ -335,16 +345,33 @@ class FakeAnthropic:
                 )
             )
             if fault is not None and not stream:
-                self._raise_stream_fault(fault, self._response_headers(n))
+                self._raise_stream_fault(fault, self._response_headers(n), streaming=False)
             return _Served(body, n, fault)
         finally:
             self.in_flight -= 1
 
-    def _raise_stream_fault(self, fault: FaultKind, headers: httpx2.Headers) -> NoReturn:
-        """Fail a response that has started, the way the SDK reports it."""
+    def _raise_stream_fault(
+        self, fault: FaultKind, headers: httpx2.Headers, *, streaming: bool
+    ) -> NoReturn:
+        """Fail a response that has started, the way the SDK reports it.
+
+        The SDK wraps transport errors only while it sends a request, which
+        for a non-streaming request includes reading its body. A streamed
+        body is read after that, so a timeout or a dropped connection there
+        comes out of the stream as the raw ``httpx2`` exception.
+        """
         request = httpx2.Request("POST", _MESSAGES_URL)
         if fault == "stream_timeout":
+            if streaming:
+                raise httpx2.ReadTimeout("timed out reading the stream", request=request)
             raise anthropic.APITimeoutError(request=request)
+        if fault == "stream_reset":
+            if streaming:
+                raise httpx2.RemoteProtocolError(
+                    "peer closed connection without sending complete message body",
+                    request=request,
+                )
+            raise anthropic.APIConnectionError(request=request)
         # An ``error`` event inside a 200 stream: the SDK raises the base
         # APIStatusError with the event's error type.
         body = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
@@ -777,7 +804,7 @@ class FakeMessageStream[T]:
 
     async def get_final_message(self) -> T:
         if self._fault is not None:
-            self._fake._raise_stream_fault(self._fault, self.response.headers)
+            self._fake._raise_stream_fault(self._fault, self.response.headers, streaming=True)
         return self._message
 
 

@@ -39,8 +39,14 @@ from precis.util import estimate_tokens
 log = logging.getLogger(__name__)
 
 # "[arXiv:2406.01234]"; grouped forms such as "[arXiv:2406.01234, arXiv:2407.0042]"
-# are accepted and split, since models produce them despite instructions.
-CITATION = re.compile(r"\s*\[arXiv:\s*([^\]]+)\]")
+# are accepted and split, since models produce them despite instructions. The
+# prefix may be in any case, and a version suffix ("2406.01234v2") is dropped,
+# since paper ids have none.
+CITATION = re.compile(r"\s*\[arXiv:\s*([^\]]+)\]", re.IGNORECASE)
+# The same with the spaces after it, so that removing a citation leaves no stray space.
+_CITATION_AND_SPACE = re.compile(CITATION.pattern + r"([ \t]*)", re.IGNORECASE)
+_PREFIX = re.compile(r"^arXiv:", re.IGNORECASE)
+_VERSION = re.compile(r"v\d+$")
 
 
 def citation(paper_id: str) -> str:
@@ -55,8 +61,8 @@ def cited_ids(text: str) -> list[str]:
 def _split_ids(group: str) -> list[str]:
     ids = []
     for part in re.split(r"[,;]", group):
-        token = part.strip()
-        token = token.removeprefix("arXiv:").strip()
+        token = _PREFIX.sub("", part.strip()).strip()
+        token = _VERSION.sub("", token)
         if token:
             ids.append(token)
     return ids
@@ -76,12 +82,20 @@ def clean_citations(text: str, allowed: set[str]) -> tuple[str, int, int]:
         valid = [pid for pid in ids if pid in allowed]
         kept += len(valid)
         removed += len(ids) - len(valid)
-        if not valid:
-            return ""
         lead = match.group(0)[: len(match.group(0)) - len(match.group(0).lstrip())]
-        return lead + " ".join(citation(pid) for pid in valid)
+        trail = match.group(2)
+        if valid:
+            return lead + " ".join(citation(pid) for pid in valid) + trail
+        # Leave one separator where the citation was: the line break before it,
+        # else the space after it, and none where the line ends anyway.
+        breaks = lead[: lead.rfind("\n") + 1]
+        if match.end() == len(match.string):
+            return ""
+        if match.string.startswith("\n", match.end()):
+            return breaks[:-1]
+        return breaks or (trail if lead else "")
 
-    return CITATION.sub(replace, text), kept, removed
+    return _CITATION_AND_SPACE.sub(replace, text), kept, removed
 
 
 # --------------------------------------------------------------------------

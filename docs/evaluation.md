@@ -116,8 +116,11 @@ topic's papers. A citation of a paper outside the topic (a hallucinated id,
 or a paper from a neighbouring topic) is removed, and the counts are stored
 with the report and printed in its closing section. Grouped citations
 (`[arXiv:a, arXiv:b]`) are split, since models produce them despite the
-instruction. Key papers outside the topic are dropped; if none is left, the
-three most central papers are used.
+instruction; a version suffix (`[arXiv:2406.01234v2]`) or a differently
+cased prefix (`[arxiv:...]`) still counts as a citation of the paper, and
+removing a citation keeps the line or paragraph break around it. Key
+papers outside the topic are dropped; if none is left, the three most
+central papers are used.
 
 **Failures.** A topic whose synthesis fails (a refusal, a reply truncated
 twice or invalid, retries exhausted) is left out of the report and named in
@@ -350,18 +353,18 @@ Apple M4 laptop; the simulated numbers are exactly reproducible.
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 4 | 7.9 | 40 | 1% | 5% | 2% | 0 | 4 | 0.9 | 1.7 |
 | 8 | 15.9 | 80 | 2% | 9% | 4% | 0 | 8 | 0.9 | 1.7 |
-| 16 | 31.6 | 159 | 4% | 18% | 8% | 0 | 16 | 0.9 | 1.6 |
+| 16 | 31.6 | 159 | 4% | 19% | 8% | 0 | 16 | 0.9 | 1.6 |
 | 32 | 62.9 | 316 | 8% | 37% | 16% | 0 | 32 | 0.9 | 1.7 |
-| 64 | 123.1 | 618 | 15% | 72% | 31% | 0 | 64 | 0.9 | 1.7 |
-| 128 | 165.1 | 829 | 21% | 96% | 42% | 0 | 128 | 1.3 | 2.4 |
-| 256 | 166.3 | 835 | 21% | 97% | 42% | 0 | 256 | 2.4 | 4.7 |
+| 64 | 123.1 | 618 | 15% | 73% | 31% | 0 | 64 | 0.9 | 1.7 |
+| 128 | 162.6 | 816 | 20% | 97% | 41% | 0 | 128 | 1.3 | 2.4 |
+| 256 | 163.6 | 822 | 21% | 97% | 41% | 0 | 256 | 2.5 | 4.8 |
 
 - **Up to a ceiling of 64, throughput is proportional to concurrency:**
   about 1.9 papers per minute per slot, as Little's law predicts for about
   five requests per paper and a mean response time of about 6 s. Paper
   latency stays flat (p50 0.9 min, p95 1.7 min) because nothing queues.
-- **From 128 the input-token limit binds: 165-166 papers/min at 96-97% of
-  the input tokens per minute, with no 429s.** The client's input-token
+- **From 128 the input-token limit binds: 163-164 papers/min at 97% of the
+  input tokens per minute, with no 429s.** The client's input-token
   bucket holds the rate just under the server's, which is what admission
   control is for; requests and output tokens have room to spare because
   cache reads do not count toward the input limit and the offline replies
@@ -386,9 +389,13 @@ Apple M4 laptop; the simulated numbers are exactly reproducible.
   That is within 0.4% (at 128) and 2.3% (at 256) of starting each run at its ceiling
   (`[limits] initial_concurrency = 256`, measured before the change: 165.8
   papers/min at 128 and 170.3 at 256), without having to know the right
-  ceiling in advance, and with no 429 at any ceiling.
+  ceiling in advance, and with no 429 at any ceiling. These comparisons are
+  from the code of the time; prompt changes since then send a few more input
+  tokens per request, which lowered the token-bound rows of the current
+  table above by about 1.5% (165.1 to 162.6 papers/min at 128, 166.3 to
+  163.6 at 256; the old commit still reproduces the old figures exactly).
 - **Latency grows once papers queue for admission:** with `2 x ceiling`
-  papers in flight, p95 paper latency rises from 1.7 minutes at 64 to 4.7
+  papers in flight, p95 paper latency rises from 1.7 minutes at 64 to 4.8
   at 256, where the extra slots buy less than 1% more throughput than at
   128: once a token limit binds, more concurrency only lengthens the queue.
 - **Admission control holds the limits exactly.** No ceiling produced a
@@ -396,40 +403,45 @@ Apple M4 laptop; the simulated numbers are exactly reproducible.
   gateway learns the limit from the response headers and stays under it
   (`tests/eval/test_bench.py`).
 - **Cost of the benchmark itself:** 28-32 s of wall time per ceiling for
-  2,000 papers (about 10,000 requests), about 3 ms of CPU per request, and
-  300 MB of memory however many papers, since each run's store is a file and
-  the fake's request log is off.
+  2,000 papers (about 10,000 requests) on an idle machine, about 3 ms of CPU
+  per request, and 300 MB of memory however many papers, since each run's
+  store is a file and the fake's request log is off. The run recorded in
+  `results/` was taken on a heavily loaded machine (load average around 50
+  on 10 cores), so its Wall column (110-680 s) measures the load, not the
+  benchmark; the simulated columns do not depend on it.
 
 **Faults and crash recovery** (`uv run precis bench faults`, `results/bench-faults.md`):
 
 |  | Value |
 | --- | --- |
 | Papers | 500 |
-| Papers finished when the first run was killed | 201 |
+| Papers finished when the first run was killed | 202 |
 | Stages running at the kill | 64 |
-| Requests in flight at the kill | 1 |
-| Requests answered in the killed run | 1,091 |
-| Requests in the resumed run | 1,426 |
-| of which served from the cache | 46 |
-| of which in flight at the kill, sent again | 1 |
-| Work kept: stages finished before the kill | $16.92 |
-| Work kept: replayed from the cache on resume | $0.26 |
-| Total cost of both runs | $40.03 |
-| Retries in both runs | 256 |
+| Requests in flight at the kill | 3 |
+| Requests answered in the killed run | 1,092 |
+| Requests in the resumed run | 1,427 |
+| of which served from the cache | 48 |
+| of which in flight at the kill, sent again | 3 |
+| Work kept: stages finished before the kill | $17.19 |
+| Work kept: replayed from the cache on resume | $0.30 |
+| Total cost of both runs | $40.71 |
+| Retries in both runs | 257 |
 | Faults injected in the resumed run | 66 x 429, 27 x 529, 38 x 500, 17 x timeout |
 | Papers done / failed / lost | 500 / 0 / 0 |
 | Requests paid for twice | 0 |
 
 Every paper finished and no request was paid for twice. Of the 64 stages
-running at the kill only one had a request in flight: with 9% of requests
+running at the kill only three had a request in flight: with 9% of requests
 failing, the adaptive window keeps halving, so most open stages were waiting
-for a slot or a backoff. The resume skipped the 201 finished papers ($16.92
-of work), replayed 46 completed turns of interrupted stages from the cache
-($0.26), and re-sent the one request whose response the crash lost. Both
-runs together cost $0.080 per paper, in line with the $0.081 per paper of the
-uninterrupted throughput runs (on a different subset of the synthetic
-papers): the crash cost one re-sent request, and the failed attempts cost
-nothing, since only answered requests are billed.
+for a slot or a backoff. The resume skipped the 202 finished papers ($17.19
+of work), replayed 48 completed turns of interrupted stages from the cache
+($0.30), and re-sent the three requests whose responses the crash lost.
+Both runs together cost $0.081 per paper, in line with the $0.082 per paper
+of the uninterrupted throughput runs (on a different subset of the synthetic
+papers): the crash cost three re-sent requests, and the failed attempts
+cost nothing, since only answered requests are billed. The kill lands at a
+moment of wall time, so these counts vary a little from run to run; the
+pass criteria do not.
 
 ### Measuring a real model
 
