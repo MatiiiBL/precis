@@ -45,6 +45,12 @@ _EDGE_PUNCTUATION = " \"'.,;:()[]"
 
 # A number not glued to a word ("L2", "x86") or to another number ("1.2.3").
 _NUMBER = re.compile(r"(?<![\w.])\d+(?:,\d{3})*(?:\.\d+)?")
+# Digit groups separated the way LaTeX math ("1{,}024", "10\,000") or siunitx
+# (a thin or no-break space) writes them; they are read as "1,024", "10,000".
+_GROUP_SEPARATOR = re.compile(r"\{,\}|\\[,;: ]|[\u00a0\u2007\u2009\u202f]")
+_GROUPED_NUMBER = re.compile(
+    rf"(?<![\w.])\d{{1,3}}(?:(?:{_GROUP_SEPARATOR.pattern})\d{{3}})+(?!\d)"
+)
 # Integers this small are often spelled out ("three datasets"), so they are
 # not required to appear as digits in the paper.
 _SMALL_INTEGER = 12
@@ -89,8 +95,10 @@ def canonical_number(raw: str) -> str:
 def numbers_in(text: str) -> list[str]:
     """Numbers in ``text`` that must be traceable to the paper, canonicalized.
 
-    Small integers are skipped because papers often spell them out.
+    Digit groups split by a LaTeX or typographic separator count as one
+    number, and small integers are skipped because papers often spell them out.
     """
+    text = _GROUPED_NUMBER.sub(lambda m: _GROUP_SEPARATOR.sub(",", m.group()), text)
     found = []
     for match in _NUMBER.finditer(text):
         number = canonical_number(match.group())

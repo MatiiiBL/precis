@@ -51,6 +51,24 @@ def test_numbers_are_canonical_and_small_integers_skipped() -> None:
     ]
 
 
+def test_digit_groups_split_the_latex_or_typographic_way_are_one_number() -> None:
+    # Math keeps its LaTeX source, and siunitx groups digits with thin spaces.
+    assert numbers_in("a table of $1{,}024$ entries and $10\\,000$ trials") == ["1024", "10000"]
+    assert numbers_in("10\u2009000 cycles, 2\u00a0048 sets, 1\u202f000\u202f000 lines") == [
+        "10000",
+        "2048",
+        "1000000",
+    ]
+    assert numbers_in("$1{,}024.5$") == ["1024.5"]
+    # Ordinary spaces and groups that are not three digits are left alone.
+    assert numbers_in("16 128-entry tables, $10\\,00$ and 3.141\u200959") == [
+        "16",
+        "128",
+        "3.141",
+        "59",
+    ]
+
+
 def test_quotes_match_despite_formatting_but_not_paraphrase() -> None:
     v = view()
     assert v.contains_quote("ReuseNet reduces LLC misses by 18.4% on average over LRU.")
