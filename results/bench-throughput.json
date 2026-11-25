@@ -17,7 +17,7 @@
       "papers_per_minute": 7.92360251394321,
       "requests": 10044,
       "requests_per_minute": 39.7923318250228,
-      "input_tokens_per_minute": 92554.56693524256,
+      "input_tokens_per_minute": 94242.09221884835,
       "output_tokens_per_minute": 7994.360284392722,
       "rate_limited": 0,
       "rate_limited_share": 0.0,
@@ -25,8 +25,8 @@
       "max_in_flight": 4,
       "paper_latency_p50_s": 52.93550741363697,
       "paper_latency_p95_s": 100.32252153099512,
-      "cost_usd": 161.19218540000034,
-      "wall_seconds": 27.99643116700463
+      "cost_usd": 163.92647759999983,
+      "wall_seconds": 454.31072787501034
     },
     {
       "concurrency": 8,
@@ -36,7 +36,7 @@
       "papers_per_minute": 15.858195831647947,
       "requests": 10044,
       "requests_per_minute": 79.639859466536,
-      "input_tokens_per_minute": 185237.51601492363,
+      "input_tokens_per_minute": 188614.90734307095,
       "output_tokens_per_minute": 15999.809520424564,
       "rate_limited": 0,
       "rate_limited_share": 0.0,
@@ -44,8 +44,8 @@
       "max_in_flight": 8,
       "paper_latency_p50_s": 52.378903940535906,
       "paper_latency_p95_s": 99.55776661345799,
-      "cost_usd": 161.19218540000037,
-      "wall_seconds": 29.448335875058547
+      "cost_usd": 163.9264775999998,
+      "wall_seconds": 679.4748795420019
     },
     {
       "concurrency": 16,
@@ -55,7 +55,7 @@
       "papers_per_minute": 31.56653464450093,
       "requests": 10044,
       "requests_per_minute": 158.52713698468366,
-      "input_tokens_per_minute": 368724.57174964424,
+      "input_tokens_per_minute": 375447.4386822895,
       "output_tokens_per_minute": 31848.423798876323,
       "rate_limited": 0,
       "rate_limited_share": 0.0,
@@ -63,8 +63,8 @@
       "max_in_flight": 16,
       "paper_latency_p50_s": 52.2526001914149,
       "paper_latency_p95_s": 98.48427995846681,
-      "cost_usd": 161.19218540000034,
-      "wall_seconds": 29.00334345898591
+      "cost_usd": 163.92647759999986,
+      "wall_seconds": 649.5521301670087
     },
     {
       "concurrency": 32,
@@ -74,7 +74,7 @@
       "papers_per_minute": 62.89828426571798,
       "requests": 10044,
       "requests_per_minute": 315.87518358243574,
-      "input_tokens_per_minute": 734706.6502817551,
+      "input_tokens_per_minute": 748102.3809241042,
       "output_tokens_per_minute": 63459.965944210846,
       "rate_limited": 0,
       "rate_limited_share": 0.0,
@@ -82,8 +82,8 @@
       "max_in_flight": 32,
       "paper_latency_p50_s": 51.82058802683275,
       "paper_latency_p95_s": 99.58117339011676,
-      "cost_usd": 161.19218540000037,
-      "wall_seconds": 29.16018183308188
+      "cost_usd": 163.9264775999998,
+      "wall_seconds": 439.5713391249883
     },
     {
       "concurrency": 64,
@@ -93,7 +93,7 @@
       "papers_per_minute": 123.09489497722267,
       "requests": 10044,
       "requests_per_minute": 618.1825625756122,
-      "input_tokens_per_minute": 1437855.4043451434,
+      "input_tokens_per_minute": 1464071.47805547,
       "output_tokens_per_minute": 124194.13238936926,
       "rate_limited": 0,
       "rate_limited_share": 0.0,
@@ -101,46 +101,46 @@
       "max_in_flight": 64,
       "paper_latency_p50_s": 52.20232052609032,
       "paper_latency_p95_s": 99.02265114468089,
-      "cost_usd": 161.19218540000017,
-      "wall_seconds": 29.229512040968984
+      "cost_usd": 163.9264775999998,
+      "wall_seconds": 507.0920219999971
     },
     {
       "concurrency": 128,
       "papers": 2000,
       "finished": 2000,
-      "simulated_minutes": 12.111555632141908,
-      "papers_per_minute": 165.13155376113343,
+      "simulated_minutes": 12.302911971251357,
+      "papers_per_minute": 162.56313990325785,
       "requests": 10044,
-      "requests_per_minute": 829.2906629884121,
-      "input_tokens_per_minute": 1928880.1298160339,
-      "output_tokens_per_minute": 166606.17853622037,
+      "requests_per_minute": 816.3920885941609,
+      "input_tokens_per_minute": 1933500.6261595238,
+      "output_tokens_per_minute": 164014.82874259393,
       "rate_limited": 0,
       "rate_limited_share": 0.0,
       "final_concurrency_limit": 128,
       "max_in_flight": 128,
-      "paper_latency_p50_s": 75.20571554038438,
-      "paper_latency_p95_s": 145.31920658653448,
-      "cost_usd": 161.19218540000034,
-      "wall_seconds": 29.85712637496181
+      "paper_latency_p50_s": 76.52068518755107,
+      "paper_latency_p95_s": 146.55627685151734,
+      "cost_usd": 163.92647759999943,
+      "wall_seconds": 108.9871083330072
     },
     {
       "concurrency": 256,
       "papers": 2000,
       "finished": 2000,
-      "simulated_minutes": 12.025946914632568,
-      "papers_per_minute": 166.30707038682337,
+      "simulated_minutes": 12.22290617273387,
+      "papers_per_minute": 163.62720712537913,
       "requests": 10044,
-      "requests_per_minute": 835.194107482627,
-      "input_tokens_per_minute": 1942611.1861157985,
-      "output_tokens_per_minute": 167792.19252537773,
+      "requests_per_minute": 821.735834183654,
+      "input_tokens_per_minute": 1946156.4757049477,
+      "output_tokens_per_minute": 165088.39808500875,
       "rate_limited": 0,
       "rate_limited_share": 0.0,
       "final_concurrency_limit": 256,
       "max_in_flight": 256,
-      "paper_latency_p50_s": 145.61922031164903,
-      "paper_latency_p95_s": 282.6935511015508,
-      "cost_usd": 161.19218540000023,
-      "wall_seconds": 29.718796125031076
+      "paper_latency_p50_s": 148.2981333360679,
+      "paper_latency_p95_s": 288.9822770139236,
+      "cost_usd": 163.9264775999996,
+      "wall_seconds": 116.54846624999482
     }
   ]
 }
