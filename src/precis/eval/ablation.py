@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from precis.agents import run_critic
 from precis.config import AgentsConfig
 from precis.corpus.stats import VerdictCounts
-from precis.eval.abstract import score_paper
+from precis.eval.abstract import AbstractScore, score_paper
 from precis.eval.metrics import Estimate, bootstrap, percentile
 from precis.eval.results import markdown_table
 from precis.eval.runs import Paper, StrategyRun, summarize_papers
@@ -57,16 +57,16 @@ class AblationEval(BaseModel):
 
 
 async def _score(gw: Gateway, run: StrategyRun, agents: AgentsConfig, seed: int) -> StrategyResult:
-    async def judge_and_check(index: int) -> tuple[float, float, list[Verdict]]:
+    async def judge_and_check(index: int) -> tuple[AbstractScore, list[Verdict]]:
         paper = run.papers[index]
         score = await score_paper(gw, paper.meta, paper.summary, agents.judge)
         critic = await run_critic(gw, paper.meta, paper.doc, paper.summary, agents)
-        return score.recall, score.rouge.rougeL, [c.verdict for c in critic.value.checks]
+        return score, [c.verdict for c in critic.value.checks]
 
     scored = await asyncio.gather(*(judge_and_check(i) for i in range(len(run.papers))))
     n = len(run.papers) or 1
     latencies = [p.latency_s for p in run.papers if p.latency_s is not None]
-    verdicts = [v for _, _, vs in scored for v in vs]
+    verdicts = [v for _, vs in scored for v in vs]
     counts = VerdictCounts(**{v.value: verdicts.count(v) for v in Verdict})
     return StrategyResult(
         strategy=run.strategy,
@@ -83,10 +83,11 @@ async def _score(gw: Gateway, run: StrategyRun, agents: AgentsConfig, seed: int)
         latency_p50_s=percentile(latencies, 50) if latencies else None,
         latency_p95_s=percentile(latencies, 95) if latencies else None,
         latency_measured=len(latencies),
-        recall=bootstrap([r for r, _, _ in scored], seed=seed),
-        rouge_l=bootstrap([r for _, r, _ in scored], seed=seed),
+        # Like eval abstract: a paper whose abstract yields no key point has no recall.
+        recall=bootstrap([s.recall for s, _ in scored if s.key_points], seed=seed),
+        rouge_l=bootstrap([s.rouge.rougeL for s, _ in scored], seed=seed),
         supported=counts.rate(Verdict.SUPPORTED),
-        fully_supported=sum(all(v is Verdict.SUPPORTED for v in vs) for _, _, vs in scored) / n,
+        fully_supported=sum(all(v is Verdict.SUPPORTED for v in vs) for _, vs in scored) / n,
     )
 
 
