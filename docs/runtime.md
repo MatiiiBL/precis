@@ -197,12 +197,12 @@ request arriving while more than 24 are in flight (64 closed-loop clients,
 
 | Concurrency control | Successful requests/min | Responses that were 529 | Mean in flight |
 |---|---|---|---|
-| AIMD with slow start (8 → 64 ceiling) | 242 | 0.8 % | 18.4 |
-| Fixed at 64 | 309 | 52.2 % | 24.1 |
+| AIMD with slow start (8 → 64 ceiling) | 244 | 0.7 % | 18.3 |
+| Fixed at 64 | 315 | 49.2 % | 24.1 |
 
 Slow start takes the window from 8 to the capacity in about ten seconds
 (the spike at the left of the figure) and stops at 25, one past the
-capacity, where the first 529 halves it. A fixed window gets 28 % more through because the fake's overload answer is
+capacity, where the first 529 halves it. A fixed window gets 29 % more through because the fake's overload answer is
 nearly free (0.1 s) and retries land in the gaps; it does so by sending about
 one failed request per successful one. Against the real API, where an
 overloaded service is slow and every client's retries add to the load, the
@@ -421,26 +421,29 @@ models what the runtime reacts to:
 
 All randomness comes from one `Random(seed)`. Time comes from a `Clock`:
 `ScaledClock(100)` runs fifteen simulated minutes in about nine seconds of
-wall time with every component keeping its real-world parameters, and
-`ManualClock` lets a unit test assert that a retry waited exactly
-`retry-after`.
+wall time with every component keeping its real-world parameters;
+`VirtualClock` (`precis.eval.simclock`), which the closed-loop simulations
+and the benchmarks use, jumps to the next wake-up whenever every task is
+waiting, so their results depend on the seed and not on how fast or busy
+the machine is; and `ManualClock` lets a unit test assert that a retry
+waited exactly `retry-after`.
 
 ## Measurements
 
-Closed-loop simulation (`uv run python -m tests.runtime.simulate`): 64
-clients send `claude-opus-5-5` requests back to back (~1,000 input and 300
+Closed-loop simulation (`uv run python -m tests.runtime.simulate`), on
+virtual time, so the figures are exactly reproducible: 64 clients send `claude-opus-5-5` requests back to back (~1,000 input and 300
 output tokens each, ~4.5 s latency with 30 % log-normal jitter) against a
 fake with 600 RPM, 1.2M ITPM and 240K OTPM. Nothing is configured; every
 limit is learned from headers. At 450 s the fake halves its request limit.
 
 | Measure | Slow start (default) | Additive only (`slow_start = false`) |
 |---|---|---|
-| Time for the window to grow from 8 to 45 (enough for 600 RPM) | 14 s | 175 s |
-| Requests/min, 60-450 s | 600 of 600 | 558 of 600 |
-| 429 responses | 0 of 6,836 | 0 |
+| Time for the window to grow from 8 to 45 (enough for 600 RPM) | 13 s | 173 s |
+| Requests/min, 60-450 s | 600 of 600 | 561 of 600 |
+| 429 responses | 0 of 6,839 | 0 |
 | Requests/min, 240-450 s (window settled) | 600 of 600 | |
 | Input / output tokens/min, 240-450 s | 601K / 180K | |
-| New 300 RPM limit adopted after the change | 1.3 s (the next response) | |
+| New 300 RPM limit adopted after the change | 1.0 s (the next response) | |
 | 30-s windows after the change | mean 300 RPM, max 316 RPM, 0 429s | |
 | Failed requests | 0 | 0 |
 
@@ -449,7 +452,7 @@ at the limit without a single 429 because it reads the limit from the
 first response and spends its burst conservatively: once the window is
 large enough, the request bucket, not the window, sets the rate. With slow
 start the window gets there in three round trips instead of three minutes,
-which is the whole difference between 558 and 600 requests per minute
+which is the whole difference between 561 and 600 requests per minute
 over the first 450 seconds.
 
 ## Limitations
