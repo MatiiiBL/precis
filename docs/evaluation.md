@@ -116,8 +116,11 @@ topic's papers. A citation of a paper outside the topic (a hallucinated id,
 or a paper from a neighbouring topic) is removed, and the counts are stored
 with the report and printed in its closing section. Grouped citations
 (`[arXiv:a, arXiv:b]`) are split, since models produce them despite the
-instruction. Key papers outside the topic are dropped; if none is left, the
-three most central papers are used.
+instruction; a version suffix (`[arXiv:2406.01234v2]`) or a differently
+cased prefix (`[arxiv:...]`) still counts as a citation of the paper, and
+removing a citation keeps the line or paragraph break around it. Key
+papers outside the topic are dropped; if none is left, the three most
+central papers are used.
 
 **Failures.** A topic whose synthesis fails (a refusal, a reply truncated
 twice or invalid, retries exhausted) is left out of the report and named in
