@@ -48,7 +48,11 @@ Stage outputs (`StageRecord.output`):
 
 A paper's final summary is the `revise` summary when that stage is `done`,
 and the `read` summary otherwise; its final verification follows the same
-rule.
+rule. A stage that is re-run keeps its previous output in its record while
+it is `running`, and when the attempt is left `pending`, `failed` or
+`refused`, until a new result replaces it; that output still counts, so an
+unfinished re-run does not take a paper's results away. When a stage's
+result changes, the outputs of the stages after it are cleared.
 
 ## 2. Records
 

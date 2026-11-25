@@ -328,6 +328,57 @@ async def test_a_new_summary_marks_later_stages_pending() -> None:
     assert not result.revised
 
 
+async def test_an_unfinished_rerun_keeps_the_previous_results() -> None:
+    pipelines: list[Pipeline] = []
+    seen: list[StageRecord | None] = []
+
+    def interrupt(params: dict[str, Any]) -> FakeReply | None:
+        if pipelines and not seen:
+            seen.append(s.store.get_stage(ids[0], Stage.READ))
+            pipelines[0].interrupt()
+        return None
+
+    s = setup(interrupt)
+    ids = add_papers(s.store, 1)
+    await s.pipeline("run-1").run(ids, ALL)
+    [before] = load_papers(s.store)
+    assert before.revised
+
+    # A changed reader setting re-runs read; interrupt it at its first request.
+    changed = config(agents={"reader": {"effort": "high"}})
+    pipelines.append(s.pipeline("run-2", config=changed))
+    stats = await pipelines[0].run(ids, ALL)
+    assert stats["interrupted"] is True
+    # While the stage ran, a crash would have found the summary in its record.
+    [running_record] = seen
+    assert running_record is not None
+    assert running_record.status is StageStatus.RUNNING
+    assert running_record.output is not None
+    read = s.store.get_stage(ids[0], Stage.READ)
+    assert read is not None
+    assert (read.status, read.error) == (StageStatus.PENDING, "interrupted")
+    assert load_papers(s.store) == [before]
+
+    # A failed attempt at the new settings keeps them too.
+    s.fake.fail_next("bad_request")
+    stats = await s.pipeline("run-3", config=changed).run(ids, ALL)
+    assert stats["stages"]["read"]["failed"] == 1
+    assert status(s, ids[0], Stage.READ) is StageStatus.FAILED
+    assert load_papers(s.store) == [before]
+
+    # Once a new summary exists, the later results are cleared, including one
+    # kept by an interrupted re-verification.
+    verify = s.store.get_stage(ids[0], Stage.VERIFY)
+    assert verify is not None
+    s.store.set_stage(verify.model_copy(update={"status": StageStatus.PENDING}))
+    fulltext = config(agents={"strategy": "fulltext"})
+    await s.pipeline("run-4", config=fulltext).run(ids, [Stage.READ])
+    [after] = load_papers(s.store)
+    assert after.summary != before.summary
+    assert after.verification is None
+    assert not after.revised
+
+
 async def test_a_real_run_redoes_what_an_offline_run_did() -> None:
     s = setup()
     ids = add_papers(s.store, 3)

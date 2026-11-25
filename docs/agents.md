@@ -296,7 +296,10 @@ verification), so faithfulness before and after revision can be compared.
   attempt in the same scope, so the turns it finished replay for free. At
   start, `Store.reset_running` turns `read`, `verify` and `revise` stages left
   `running` by a crash back to `pending`; the `fetch` rows of a concurrent
-  `precis fetch` are not touched.
+  `precis fetch` are not touched. A stage re-run with new settings keeps its
+  previous output in its record until the new result is stored, so an
+  interrupt, a crash, the budget or a failure leaves the paper's earlier
+  summary and verification in place for `export`, `topics` and `site`.
 - **Budget.** `budget.max_cost_usd` (`--max-cost`) caps the store's total
   recorded spend, over every run (offline calls are not spend; see
   [runtime.md](runtime.md#store)). `BudgetExceeded` from the gateway leaves

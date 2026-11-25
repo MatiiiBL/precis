@@ -3,7 +3,9 @@
 This is the only corpus module that knows how the pipeline lays out stage
 outputs (docs/design.md, section 1): the read stage holds the first summary,
 the verify stage its verification, and the revise stage, when it ran, a
-``RevisionResult`` with the rewritten summary and its re-verification.
+``RevisionResult`` with the rewritten summary and its re-verification. A
+stage being re-run keeps its last result in its record until a new one
+replaces it, so a record's output counts whatever its status.
 Everything downstream works on ``FinishedPaper`` objects.
 """
 
@@ -17,7 +19,6 @@ from precis.models import (
     RevisionResult,
     Stage,
     StageRecord,
-    StageStatus,
     Verification,
 )
 from precis.store import Store
@@ -46,10 +47,9 @@ class FinishedPaper:
         return self.summary.revision > self.draft.revision
 
 
-def _done_output(record: StageRecord | None) -> dict[str, object] | None:
-    if record is None or record.status is not StageStatus.DONE:
-        return None
-    return record.output
+def _finished_output(record: StageRecord | None) -> dict[str, object] | None:
+    """The stage's last result: done, or kept while a re-run is unfinished or failed."""
+    return None if record is None else record.output
 
 
 def paper_view(
@@ -60,17 +60,17 @@ def paper_view(
 ) -> FinishedPaper:
     """Combine one paper's stage records into a ``FinishedPaper``.
 
-    ``read`` must be done; a verify or revise record that is missing or not
-    done is treated as absent, so a paper stopped between stages still shows
-    its first summary.
+    ``read`` must have a finished summary; a verify or revise record without
+    a result is treated as absent, so a paper stopped between stages still
+    shows its first summary.
     """
-    read_out = _done_output(read)
+    read_out = _finished_output(read)
     if read_out is None:
         raise ValueError(f"{meta.id}: the read stage has no finished summary")
     draft = PaperSummary.model_validate(read_out)
-    verify_out = _done_output(verify)
+    verify_out = _finished_output(verify)
     draft_verification = None if verify_out is None else Verification.model_validate(verify_out)
-    revise_out = _done_output(revise)
+    revise_out = _finished_output(revise)
     if revise_out is None:
         return FinishedPaper(meta, draft, draft_verification, draft, draft_verification)
     revision = RevisionResult.model_validate(revise_out)
@@ -78,19 +78,18 @@ def paper_view(
 
 
 def load_papers(store: Store) -> list[FinishedPaper]:
-    """Every paper whose read stage is done, ordered by id."""
+    """Every paper whose read stage has a finished summary, ordered by id."""
     views = []
-    for paper_id in sorted(store.papers_with_status(Stage.READ, StageStatus.DONE)):
-        meta = store.get_paper(paper_id)
-        read = store.get_stage(paper_id, Stage.READ)
-        if meta is None or read is None:
+    for meta in sorted(store.list_papers(), key=lambda m: m.id):
+        read = store.get_stage(meta.id, Stage.READ)
+        if read is None or read.output is None:
             continue
         views.append(
             paper_view(
                 meta,
                 read,
-                store.get_stage(paper_id, Stage.VERIFY),
-                store.get_stage(paper_id, Stage.REVISE),
+                store.get_stage(meta.id, Stage.VERIFY),
+                store.get_stage(meta.id, Stage.REVISE),
             )
         )
     return views
