@@ -44,6 +44,7 @@ from functools import partial
 from typing import Any
 
 import anthropic
+import httpx2
 from anthropic.types import Message
 from anthropic.types.messages import MessageBatchResult
 
@@ -68,6 +69,9 @@ _TRANSIENT = (
     anthropic.RateLimitError,
     anthropic.InternalServerError,
     anthropic.APIConnectionError,
+    # The SDK wraps transport errors only while it sends a request; one that
+    # breaks a results stream midway comes out as the raw httpx2 exception.
+    httpx2.TransportError,
 )
 
 # Bytes a request adds to a batch besides its params (custom_id, framing).
@@ -324,6 +328,13 @@ class BatchQueue:
             retry += [(item, "missing from the batch results") for item in pending.values()]
             self._store.close_batch(batch_id)
             self._open.discard(batch_id)
+        except Exception as e:
+            # Nothing else would ever resolve these callers. The batch stays
+            # open in the store, so the next run collects what it bought.
+            log.exception("collecting batch %s failed; it stays open for the next run", batch_id)
+            for item in items:
+                _fail(item, GatewayError(f"collecting batch {batch_id} failed: {e}"))
+            return
         finally:
             self._in_batches -= len(items)
         # Requeue together, once the whole result set is read, so the retries

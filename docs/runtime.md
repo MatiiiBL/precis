@@ -239,8 +239,14 @@ and a cached one are the same type.
 
 An error inside a stream that has already started arrives from the SDK as
 the base `APIStatusError` with status 200, so it is classified by its
-`type`. A timeout is retried only once: each timed-out attempt may have been
-generated and billed in full, and none of it would be recorded.
+`type`. A read timeout or a dropped connection after the response has
+started is a different case: the SDK converts transport errors into
+`APITimeoutError` and `APIConnectionError` only while it sends a request,
+so these come out of the stream as the raw `httpx2` exceptions, and the
+gateway converts them itself. (Before it did, they escaped `create` on the
+first attempt: no retry, no `error` call, and a failed stage for one
+network blip.) A timeout is retried only once: each timed-out attempt may
+have been generated and billed in full, and none of it would be recorded.
 
 Full jitter waits a uniformly random time in `[0, min(60 s, 1 s · 2^(n-1))]`
 before attempt `n + 1`, which spreads a burst of simultaneous failures
@@ -352,7 +358,11 @@ caller. Now:
   recording the results twice;
 - polling and result-stream errors retry the same batch with backoff up to
   `batch_poll_max_s`, indefinitely; the stream is reopened and entries
-  already filed are skipped; items are requeued only once the batch has
+  already filed are skipped (a connection that drops mid-stream raises the
+  raw `httpx2` error, which counts as transient too); any other error while
+  a batch is collected (the store failing to file a result, say) fails its
+  waiting callers with `GatewayError` instead of leaving them waiting
+  forever, and leaves the batch open for the next run; items are requeued only once the batch has
   ended without them, or the API says it no longer exists;
 - a gateway that starts on a store with open batches collects their results
   in the background (in either mode), and a batch-mode request whose result
@@ -394,7 +404,9 @@ models what the runtime reacts to:
   continuously, answer 429 with `retry-after`, and send the rate-limit
   headers on every response; `set_limits` changes them mid-run.
 - **Faults.** Random or scripted (`fail_next`) 429, 529, 500, timeouts and
-  400s; an error event or a timeout after a stream has started; 529 above a
+  400s; an error event, a timeout or a dropped connection after a stream
+  has started (the last two as the raw `httpx2` errors the SDK lets
+  through); 529 above a
   concurrency threshold; errored and expired batch items; Batches API
   outages on create, retrieve or mid-way through a results stream
   (`fail_batch_api`); a 413 for batches over `max_batch_bytes`.

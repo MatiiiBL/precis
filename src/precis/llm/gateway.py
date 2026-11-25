@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 import anthropic
+import httpx2
 import pydantic
 from anthropic.types import Message
 from anthropic.types.beta import BetaMessage
@@ -665,13 +666,38 @@ class Gateway:
 
 
 async def _stream[T](manager: MessageStreamManagerLike[T]) -> tuple[T, dict[str, str]]:
+    """Send a streamed request; return its final message and the response headers.
+
+    The SDK turns transport errors into ``APITimeoutError`` and
+    ``APIConnectionError`` only while it sends a request. Once the response
+    has started, a read timeout or a dropped connection comes out of the
+    stream as the raw ``httpx2`` exception; it is translated here so the
+    retry policy sees the same error either way.
+    """
     async with manager as stream:
         headers = dict(stream.response.headers)
+        request_id = headers.get("request-id")
         try:
             return await stream.get_final_message(), headers
         except anthropic.APITimeoutError:
-            log.warning("request %s timed out mid-stream", headers.get("request-id"))
+            log.warning("request %s timed out mid-stream", request_id)
             raise
+        except httpx2.TimeoutException as e:
+            log.warning("request %s timed out mid-stream", request_id)
+            raise anthropic.APITimeoutError(request=_request_of(e)) from e
+        except httpx2.TransportError as e:
+            log.warning("request %s lost its connection mid-stream: %s", request_id, e)
+            raise anthropic.APIConnectionError(
+                message=f"connection lost mid-stream: {e}", request=_request_of(e)
+            ) from e
+
+
+def _request_of(error: httpx2.RequestError) -> httpx2.Request:
+    """The request an ``httpx2`` error belongs to, or a stand-in when it carries none."""
+    try:
+        return error.request
+    except RuntimeError:
+        return httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
 
 
 def _cache_write_ttl(params: dict[str, Any]) -> Literal["5m", "1h"] | None:

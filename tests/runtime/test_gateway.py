@@ -436,6 +436,24 @@ async def test_timeouts_are_retried_at_most_once(
     assert gw.stats().timeouts == 2
     # The attempt that timed out after the response started names its request.
     assert "req_fake_" in caplog.text
+    # Retries ran out, so the request is recorded as a failed call.
+    [call] = store.calls()
+    assert (call.status, call.attempts) == ("error", 2)
+
+
+async def test_a_connection_dropped_mid_stream_is_retried(store: Store, clock: ManualClock) -> None:
+    # The SDK lets the raw httpx2 error out of a stream that has started.
+    fake = FakeAnthropic([echo], clock=clock)
+    fake.fail_next("stream_reset", "stream_reset")
+    gw = gateway(fake, store, clock)
+
+    reply = await gw.create(request("flaky network"), stage="read")
+
+    assert reply.content[0].type == "text"
+    stats = gw.stats()
+    assert (stats.retries, stats.errors, stats.timeouts) == (2, 0, 0)
+    [call] = store.calls()
+    assert (call.status, call.attempts) == ("ok", 3)
 
 
 # ----------------------------------------------------------------------

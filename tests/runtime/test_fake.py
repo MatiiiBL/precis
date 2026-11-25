@@ -1,6 +1,7 @@
 from typing import Any
 
 import anthropic
+import httpx2
 import pytest
 from anthropic.types import Message
 
@@ -265,3 +266,22 @@ async def test_streaming_returns_headers_and_the_final_message(clock: ManualCloc
             await stream.get_final_message()
     assert excinfo.value.status_code == 200
     assert excinfo.value.type == "overloaded_error"
+
+
+async def test_transport_errors_mid_stream_are_raw_like_the_sdks(clock: ManualClock) -> None:
+    # The SDK wraps transport errors only while it sends a request (for a
+    # non-streaming request that includes reading the body); once a stream
+    # has started they come out as the raw httpx2 exceptions.
+    fake = FakeAnthropic([echo], clock=clock)
+    fake.fail_next("stream_timeout", "stream_reset")
+    for raw in (httpx2.ReadTimeout, httpx2.RemoteProtocolError):
+        async with fake.messages.stream(**request()) as stream:
+            with pytest.raises(raw):
+                await stream.get_final_message()
+
+    fake.fail_next("stream_timeout", "stream_reset")
+    with pytest.raises(anthropic.APITimeoutError):
+        await fake.messages.create(**request())
+    with pytest.raises(anthropic.APIConnectionError):
+        await fake.messages.create(**request())
+    assert [e.outcome for e in fake.events] == ["timeout", "reset"] * 2
